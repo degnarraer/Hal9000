@@ -1,0 +1,9 @@
+http://{$APP_HOST:app.localhost} {
+  encode gzip zstd
+  reverse_proxy app:3000
+}
+
+http://{$AUTH_HOST:auth.localhost} {
+  encode gzip zstd
+  reverse_proxy keycloak:8080
+}

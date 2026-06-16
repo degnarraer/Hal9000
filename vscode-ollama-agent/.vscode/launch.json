@@ -20,7 +20,7 @@
             "type": "node",
             "request": "launch",
             "name": "Launch Server and Open Browser",
-            "program": "${workspaceFolder}/server/index.js",
+            "program": "${workspaceFolder}/scripts/start-server.js",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "preLaunchTask": "stop-server",
@@ -39,6 +39,94 @@
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "skipFiles": ["<node_internals>/**"]
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Check New Server Prereqs",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/install-server.ps1",
+                "-CheckOnly"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Install New Server Prereqs",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/install-server.ps1"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Full New Server Install",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/install-server.ps1",
+                "-Full"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Install WSL for Docker",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/install-server.ps1",
+                "-InstallWsl"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Install New Server Prereqs and Persist PATH",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/install-server.ps1",
+                "-PersistPath"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Start Docker Desktop",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/start-docker.ps1"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
         },
         {
             "type": "node",

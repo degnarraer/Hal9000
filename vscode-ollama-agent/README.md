@@ -41,6 +41,8 @@ This project is licensed under the MIT License. See the LICENSE file for more de
 
 A simple Express server is included at `server/index.js` which proxies requests to your local Ollama instance and serves a web UI from `public/index.html`.
 
+For an internet-facing setup with separated services, Keycloak authentication, PostgreSQL, Ollama, and Caddy, see `DEPLOYMENT.md`.
+
 ### Features
 
 - **Chat Interface**: Real-time streaming chat with Ollama models

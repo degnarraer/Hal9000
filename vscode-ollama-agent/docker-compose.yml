@@ -1,0 +1,105 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_HOST: ${APP_HOST:-app.localhost}
+      AUTH_HOST: ${AUTH_HOST:-auth.localhost}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      public_net:
+        aliases:
+          - app.localhost
+          - auth.localhost
+          - ${APP_HOST:-app.localhost}
+          - ${AUTH_HOST:-auth.localhost}
+      app_net:
+        aliases:
+          - app.localhost
+          - auth.localhost
+          - ${APP_HOST:-app.localhost}
+          - ${AUTH_HOST:-auth.localhost}
+    depends_on:
+      - app
+      - keycloak
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama2}
+      SECURITY_ENABLED: "true"
+      SECURITY_SECURE_COOKIES: ${SECURITY_SECURE_COOKIES:-false}
+      SECURITY_CONFIG_PATH: /app/security.config.json
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://auth.localhost/realms/ollama-agent}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-ollama-agent}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-change-me-before-production}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://app.localhost/auth/callback}
+      OIDC_REGISTRATION_ENDPOINT: ${OIDC_REGISTRATION_ENDPOINT:-}
+    networks:
+      - app_net
+    depends_on:
+      - ollama
+      - keycloak
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app_net
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    restart: unless-stopped
+    command:
+      - start-dev
+      - --import-realm
+      - --hostname=http://${AUTH_HOST:-auth.localhost}
+      - --hostname-strict=false
+      - --proxy-headers=xforwarded
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_HOST: keycloak-db
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-change-me-before-production}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me-before-production}
+    volumes:
+      - ./deploy/keycloak/ollama-agent-realm.json:/opt/keycloak/data/import/ollama-agent-realm.json:ro
+    networks:
+      - app_net
+    depends_on:
+      - keycloak-db
+
+  keycloak-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-change-me-before-production}
+    volumes:
+      - keycloak_db_data:/var/lib/postgresql/data
+    networks:
+      - app_net
+
+networks:
+  public_net:
+  app_net:
+
+volumes:
+  caddy_data:
+  caddy_config:
+  ollama_data:
+  keycloak_db_data:

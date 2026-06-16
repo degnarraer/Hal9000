@@ -76,9 +76,9 @@ function routePolicy(req, config) {
 }
 
 function statusIcon(statusCode, securityPassed) {
-  if (!securityPassed || statusCode >= 400) return '🔴';
-  if (statusCode >= 300) return '🟡';
-  return '🟢';
+  if (!securityPassed || statusCode >= 400) return '\u{1F534}';
+  if (statusCode >= 300) return '\u{1F7E1}';
+  return '\u{1F7E2}';
 }
 
 function requestLogger(logger, config) {
@@ -208,8 +208,6 @@ function createSecurityMiddleware(logger) {
       markPassed(req, { name: 'local-dev' });
       return next();
     }
-
-    if (req.path.startsWith('/auth/')) return next();
 
     try {
       const bearer = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];

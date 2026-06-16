@@ -1,0 +1,49 @@
+{
+  "realm": "ollama-agent",
+  "enabled": true,
+  "registrationAllowed": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "verifyEmail": false,
+  "clients": [
+    {
+      "clientId": "ollama-agent",
+      "name": "Ollama Agent",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "change-me-before-production",
+      "redirectUris": [
+        "http://app.localhost/auth/callback",
+        "https://app.localhost/auth/callback"
+      ],
+      "webOrigins": [
+        "http://app.localhost",
+        "https://app.localhost"
+      ],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "post.logout.redirect.uris": "http://app.localhost/*##https://app.localhost/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

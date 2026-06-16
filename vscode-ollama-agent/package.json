@@ -7,8 +7,20 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./tsconfig.json",
     "watch": "tsc -watch -p ./tsconfig.json",
-    "start-server": "node server/index.js",
-    "stop-server": "node scripts/stop-server.js"
+    "start-server": "node scripts/start-server.js",
+    "stop-server": "node scripts/stop-server.js",
+    "docker:config": "powershell -ExecutionPolicy Bypass -File scripts/run-docker.ps1 compose config",
+    "docker:start": "powershell -ExecutionPolicy Bypass -File scripts/start-docker.ps1",
+    "docker:check-virtualization": "powershell -ExecutionPolicy Bypass -File scripts/test-virtualization.ps1",
+    "docker:build": "powershell -ExecutionPolicy Bypass -File scripts/run-docker.ps1 compose build",
+    "docker:up": "powershell -ExecutionPolicy Bypass -File scripts/run-docker.ps1 compose up --build",
+    "docker:down": "powershell -ExecutionPolicy Bypass -File scripts/run-docker.ps1 compose down",
+    "docker:logs": "powershell -ExecutionPolicy Bypass -File scripts/run-docker.ps1 compose logs -f",
+    "server:install": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1",
+    "server:install:full": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -Full",
+    "server:install:wsl": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -InstallWsl",
+    "server:install:persist-path": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -PersistPath",
+    "server:check": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -CheckOnly"
   },
   "keywords": [
     "vscode",

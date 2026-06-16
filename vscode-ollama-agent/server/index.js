@@ -35,8 +35,8 @@ app.get('/auth/login', security.login);
 app.get('/auth/start', security.startLogin);
 app.get('/auth/register', security.register);
 app.get('/auth/callback', security.callback);
-app.post('/auth/logout', security.logout);
 app.use(security.authenticate);
+app.post('/auth/logout', security.logout);
 
 // Asset version for cache-busting (set once when server starts)
 const ASSET_VERSION = Date.now();
