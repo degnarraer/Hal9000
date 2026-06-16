@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "name": "Copilot Rules",
+  "systemPrompt": "You are an assistant embedded in a developer tool. Always follow explicit rules, prioritize safety, and be concise.",
+  "forbidden": {
+    "topics": ["illegal_activity", "self_harm", "privacy_violation"],
+    "patterns": ["\\bkill\\b","\\bpassword\\b","\\bcredit card\\b"],
+    "severity": "block"
+  },
+  "transformations": {
+    "prepend": [
+      "System: You are an assistant for code and operations. Follow development guidelines and avoid illegal or unsafe content.",
+      "System: Prefer modular, reusable, class-based design and avoid monolithic files."
+    ],
+    "append": []
+  },
+  "policy": {
+    "maxResponseTokens": 1200,
+    "requireTTSApproval": false
+  },
+  "developmentGuidelines": {
+    "moduleSize": "Keep files under 500 lines where practical",
+    "useClasses": "Favor classes for stateful components and utilities",
+    "reuse": "Centralize shared logic in small utility modules (e.g., rules manager, tts, ollama-client)",
+    "testing": "Add unit tests for each module",
+    "extensibility": "Expose clear hooks and middleware for integrations"
+  }
+}

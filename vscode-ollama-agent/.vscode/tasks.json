@@ -1,0 +1,49 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "start-server",
+      "type": "shell",
+      "command": "npm.cmd run start-server",
+      "isBackground": true,
+      "problemMatcher": [
+        {
+          "owner": "server",
+          "pattern": {
+            "regexp": "^(.*)$",
+            "file": 1,
+            "message": 1
+          },
+          "background": {
+            "beginsPattern": ".",
+            "endsPattern": "Server listening on"
+          }
+        }
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "stop-server",
+      "type": "shell",
+      "command": "npm.cmd run stop-server",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "open-browser",
+      "type": "shell",
+      "command": "Start-Process http://localhost:3000",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      }
+    }
+  ]
+}

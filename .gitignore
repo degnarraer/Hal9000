@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+*.vsix
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and runtime output
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Root-level accidental npm output. The actual app lockfile lives in
+# vscode-ollama-agent/package-lock.json and should be committed.
+/package-lock.json
+
+# Local caches
+.cache/
+.tmp/
+tmp/

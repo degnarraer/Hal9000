@@ -1,0 +1,54 @@
+{
+  "name": "vscode-ollama-agent",
+  "version": "1.0.0",
+  "description": "A VS Code extension that integrates with the Ollama API as an agent.",
+  "main": "./src/extension.ts",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./tsconfig.json",
+    "watch": "tsc -watch -p ./tsconfig.json",
+    "start-server": "node server/index.js",
+    "stop-server": "node scripts/stop-server.js"
+  },
+  "keywords": [
+    "vscode",
+    "extension",
+    "ollama",
+    "agent"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "activationEvents": [
+    "onCommand:activateAgent",
+    "onCommand:stopAgent"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "activateAgent",
+        "title": "Activate Ollama Agent"
+      },
+      {
+        "command": "stopAgent",
+        "title": "Stop Ollama Agent"
+      }
+    ]
+  },
+  "dependencies": {
+    "axios": "^0.21.1",
+    "chart.js": "^4.3.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "google-tts-api": "^2.0.1",
+    "lucide": "^1.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^14.14.37",
+    "@types/vscode": "^1.60.0",
+    "typescript": "^4.4.3"
+  }
+}
