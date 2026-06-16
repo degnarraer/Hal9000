@@ -1,7 +1,10 @@
 const messagesEl = document.getElementById('messages');
 const input = document.getElementById('input');
 const send = document.getElementById('send');
+const modelSelect = document.getElementById('model');
+const refreshModels = document.getElementById('refreshModels');
 const defaultModel = 'llama2';
+const selectedModelKey = 'selectedModel';
 let currentAudio;
 let playbackRate = Number(localStorage.getItem('playbackRate') || '1');
 let aiAudioCtx;
@@ -45,8 +48,60 @@ async function sendMessage() {
 }
 
 function getSelectedModel() {
-  const modelEl = document.getElementById('model');
-  return modelEl?.value || defaultModel;
+  return modelSelect?.value || defaultModel;
+}
+
+function normalizeModelName(item) {
+  if (typeof item === 'string') return item;
+  return item?.name || item?.model || '';
+}
+
+async function loadChatModels() {
+  if (!modelSelect) return;
+
+  const previousValue = localStorage.getItem(selectedModelKey) || modelSelect.value || defaultModel;
+  modelSelect.disabled = true;
+
+  try {
+    const resp = await fetch('/api/ollama/models', { cache: 'no-store' });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error || 'Could not load models');
+
+    const models = (json.data || [])
+      .map(normalizeModelName)
+      .filter(Boolean);
+
+    modelSelect.innerHTML = '';
+
+    if (models.length === 0) {
+      const option = document.createElement('option');
+      option.value = defaultModel;
+      option.textContent = `${defaultModel} (default)`;
+      modelSelect.appendChild(option);
+      modelSelect.value = defaultModel;
+      return;
+    }
+
+    models.forEach(name => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      modelSelect.appendChild(option);
+    });
+
+    modelSelect.value = models.includes(previousValue) ? previousValue : models[0];
+    localStorage.setItem(selectedModelKey, modelSelect.value);
+  } catch (err) {
+    console.warn('Failed to load chat models', err);
+    if (!modelSelect.options.length) {
+      const option = document.createElement('option');
+      option.value = defaultModel;
+      option.textContent = defaultModel;
+      modelSelect.appendChild(option);
+    }
+  } finally {
+    modelSelect.disabled = false;
+  }
 }
 
 function unlockAudio() {
@@ -192,7 +247,7 @@ function sendPrompt(prompt) {
   const url = `/api/stream?model=${encodeURIComponent(model)}&prompt=${encodeURIComponent(prompt)}`;
 
   const evt = new EventSource(url);
-  const botEl = addMessage('bot', '');
+  const botEl = addMessage('bot', `Using ${model}...`);
   let partial = '';
 
   evt.onmessage = (e) => {
@@ -225,8 +280,15 @@ playbackSpeed?.addEventListener('click', (event) => {
   stepPlaybackRate(Number(button.dataset.speedStep));
 });
 
+modelSelect?.addEventListener('change', () => {
+  localStorage.setItem(selectedModelKey, modelSelect.value);
+});
+
+refreshModels?.addEventListener('click', loadChatModels);
+
 setPlaybackRate(playbackRate);
+loadChatModels();
 renderIcons();
 
 window.__icons = { render: renderIcons };
-window.__chat = { sendPrompt, speakText, unlockAudio, setPlaybackRate };
+window.__chat = { sendPrompt, speakText, unlockAudio, setPlaybackRate, loadModels: loadChatModels };

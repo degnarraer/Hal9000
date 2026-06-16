@@ -20,14 +20,25 @@
           <div class="voice-panel ai-voice">
             <div class="voice-label voice-label-row">
               <span><i data-lucide="bot"></i> AI</span>
-              <div id="playbackSpeed" class="playback-speed" aria-label="Playback speed">
-                <button type="button" data-speed-step="-1" aria-label="Slower" title="Slower">
-                  <i data-lucide="rewind"></i>
-                </button>
-                <span id="playbackRateLabel">1x</span>
-                <button type="button" data-speed-step="1" aria-label="Faster" title="Faster">
-                  <i data-lucide="fast-forward"></i>
-                </button>
+              <div class="ai-card-controls">
+                <div class="model-picker">
+                  <label for="model">Model</label>
+                  <select id="model" aria-label="Select chat model">
+                    <option value="llama2">llama2</option>
+                  </select>
+                  <button id="refreshModels" class="btn-icon" type="button" aria-label="Refresh models" title="Refresh models">
+                    <i data-lucide="refresh-cw"></i>
+                  </button>
+                </div>
+                <div id="playbackSpeed" class="playback-speed" aria-label="Playback speed">
+                  <button type="button" data-speed-step="-1" aria-label="Slower" title="Slower">
+                    <i data-lucide="rewind"></i>
+                  </button>
+                  <span id="playbackRateLabel">1x</span>
+                  <button type="button" data-speed-step="1" aria-label="Faster" title="Faster">
+                    <i data-lucide="fast-forward"></i>
+                  </button>
+                </div>
               </div>
             </div>
             <canvas id="aiWaveform" width="420" height="80"></canvas>

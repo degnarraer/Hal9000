@@ -44,6 +44,12 @@ const routes = {
 
 let currentRoute = 'chat';
 let logSource;
+let monitorTimer;
+
+function renderMenuIcons() {
+  window.__icons?.render?.(menuBtn);
+  window.__icons?.render?.(panel);
+}
 
 function setPanelOpen(isOpen) {
   if (isOpen) {
@@ -75,13 +81,15 @@ async function loadMenuLanding() {
       button.classList.toggle('active', button.dataset.menuRoute === currentRoute);
       button.addEventListener('click', () => loadMainPage(button.dataset.menuRoute));
     });
-    window.__icons?.render?.(panel);
+    renderMenuIcons();
   } catch (err) {
     menuContent.innerHTML = `<div class="menu-error">Could not load menu: ${escapeHtml(err.message)}</div>`;
   }
 }
 
 async function loadMainPage(routeName) {
+  if (currentRoute === 'monitor' && routeName !== 'monitor') stopMonitorAutoRefresh();
+
   if (routeName === 'chat') {
     currentRoute = 'chat';
     mainPage.hidden = true;
@@ -119,6 +127,10 @@ function initModels() {
 
 function initMonitor() {
   byId('refreshMonitor')?.addEventListener('click', fetchMonitor);
+  byId('autoRefreshMonitor')?.addEventListener('change', toggleMonitorAutoRefresh);
+  byId('inspectModel')?.addEventListener('click', inspectMonitorModel);
+  byId('loadModel')?.addEventListener('click', loadMonitorModel);
+  byId('unloadModel')?.addEventListener('click', unloadMonitorModel);
   fetchMonitor();
 }
 
@@ -209,6 +221,7 @@ async function removeModel(model) {
     if (!j.ok) throw new Error(j.error || JSON.stringify(j));
     if (modelStatus) modelStatus.textContent = 'Removed ' + model;
     fetchModels();
+    window.__chat?.loadModels?.();
   } catch (err) {
     if (modelStatus) modelStatus.textContent = 'Error removing: ' + err.message;
   }
@@ -232,6 +245,7 @@ async function installModel() {
     if (modelStatus) modelStatus.textContent = 'Installed ' + model;
     modelInput.value = '';
     fetchModels();
+    window.__chat?.loadModels?.();
   } catch (err) {
     if (modelStatus) modelStatus.textContent = 'Install error: ' + err.message;
   }
@@ -311,6 +325,7 @@ async function downloadModel(model) {
     if (modelStatus) modelStatus.textContent = `Downloaded ${model}`;
     fetchModels();
     fetchAvailableModels();
+    window.__chat?.loadModels?.();
   } catch (err) {
     if (modelStatus) modelStatus.textContent = `Download error: ${err.message}`;
   }
@@ -318,17 +333,177 @@ async function downloadModel(model) {
 
 async function fetchMonitor() {
   const monitorOutput = byId('monitorOutput');
+  const monitorSummary = byId('monitorSummary');
+  const loadedModels = byId('loadedModels');
+  const modelSelect = byId('monitorModelSelect');
   if (!monitorOutput) return;
   monitorOutput.textContent = 'Refreshing...';
+  if (monitorSummary) monitorSummary.innerHTML = '';
+  if (loadedModels) loadedModels.textContent = 'Loading...';
 
   try {
-    const r = await fetch('/api/ollama/monitor');
+    const r = await fetch('/api/ollama/monitor/details', { cache: 'no-store' });
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || JSON.stringify(j));
+    renderMonitor(j.data);
+    populateMonitorModels(modelSelect, j.data.models || []);
     monitorOutput.textContent = JSON.stringify(j.data, null, 2);
   } catch (e) {
     monitorOutput.textContent = 'Error: ' + e.message;
+    if (loadedModels) loadedModels.textContent = 'Error loading monitor data';
   }
+}
+
+function renderMonitor(data) {
+  const monitorSummary = byId('monitorSummary');
+  const loadedModels = byId('loadedModels');
+  if (!monitorSummary || !loadedModels) return;
+
+  const running = data.running || [];
+  const models = data.models || [];
+  const version = data.version?.version || 'unknown';
+
+  monitorSummary.innerHTML = `
+    <div class="metric"><span>Service</span><strong>${escapeHtml(data.url || 'unknown')}</strong></div>
+    <div class="metric"><span>Version</span><strong>${escapeHtml(version)}</strong></div>
+    <div class="metric"><span>Installed</span><strong>${models.length}</strong></div>
+    <div class="metric"><span>Loaded</span><strong>${running.length}</strong></div>
+  `;
+
+  if (running.length === 0) {
+    loadedModels.innerHTML = '<div class="empty">No models are currently loaded</div>';
+    return;
+  }
+
+  loadedModels.innerHTML = '';
+  running.forEach(model => {
+    const name = model.name || model.model || 'unknown';
+    const size = formatBytes(model.size || model.size_vram || 0);
+    const expiresAt = model.expires_at ? new Date(model.expires_at).toLocaleTimeString() : 'not reported';
+    const row = document.createElement('div');
+    row.className = 'monitor-model-row';
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(name)}</strong>
+        <small>VRAM ${escapeHtml(size)} - expires ${escapeHtml(expiresAt)}</small>
+      </div>
+      <button type="button" data-monitor-unload="${escapeHtml(name)}">Unload</button>
+    `;
+    loadedModels.appendChild(row);
+  });
+
+  loadedModels.querySelectorAll('[data-monitor-unload]').forEach(button => {
+    button.addEventListener('click', () => unloadMonitorModel(button.dataset.monitorUnload));
+  });
+}
+
+function populateMonitorModels(modelSelect, models) {
+  if (!modelSelect) return;
+  const selected = modelSelect.value || localStorage.getItem('selectedModel') || '';
+  modelSelect.innerHTML = '';
+
+  models.forEach(model => {
+    const name = typeof model === 'string' ? model : (model.name || model.model || '');
+    if (!name) return;
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    modelSelect.appendChild(option);
+  });
+
+  if (selected && Array.from(modelSelect.options).some(option => option.value === selected)) {
+    modelSelect.value = selected;
+  }
+}
+
+async function inspectMonitorModel() {
+  const model = byId('monitorModelSelect')?.value;
+  const details = byId('modelDetails');
+  if (!model || !details) return;
+  details.textContent = `Inspecting ${model}...`;
+
+  try {
+    const r = await fetch('/api/ollama/show', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model })
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
+    details.textContent = JSON.stringify(j.data, null, 2);
+  } catch (err) {
+    details.textContent = 'Inspect error: ' + err.message;
+  }
+}
+
+async function loadMonitorModel() {
+  const model = byId('monitorModelSelect')?.value;
+  const keepAlive = byId('keepAliveSelect')?.value || '5m';
+  const details = byId('modelDetails');
+  if (!model) return;
+  if (details) details.textContent = `Loading ${model}...`;
+
+  try {
+    const r = await fetch('/api/ollama/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, keepAlive })
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
+    if (details) details.textContent = `Loaded ${model} with keep_alive ${keepAlive}`;
+    fetchMonitor();
+  } catch (err) {
+    if (details) details.textContent = 'Load error: ' + err.message;
+  }
+}
+
+async function unloadMonitorModel(modelOverride) {
+  const model = modelOverride || byId('monitorModelSelect')?.value;
+  const details = byId('modelDetails');
+  if (!model) return;
+  if (details) details.textContent = `Unloading ${model}...`;
+
+  try {
+    const r = await fetch('/api/ollama/unload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model })
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
+    if (details) details.textContent = `Unloaded ${model}`;
+    fetchMonitor();
+  } catch (err) {
+    if (details) details.textContent = 'Unload error: ' + err.message;
+  }
+}
+
+function toggleMonitorAutoRefresh(event) {
+  stopMonitorAutoRefresh();
+
+  if (event.target.checked) {
+    monitorTimer = setInterval(fetchMonitor, 3000);
+  }
+}
+
+function stopMonitorAutoRefresh() {
+  if (!monitorTimer) return;
+  clearInterval(monitorTimer);
+  monitorTimer = null;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return 'unknown';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index++;
+  }
+  return `${size.toFixed(size >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
 async function fetchLogs() {
@@ -427,7 +602,7 @@ menuBtn.addEventListener('click', () => {
 closeBtn.addEventListener('click', () => setPanelOpen(false));
 
 loadMenuLanding();
-window.__icons?.render?.(panel);
+renderMenuIcons();
 
 window.__menu = {
   open: () => setPanelOpen(true),

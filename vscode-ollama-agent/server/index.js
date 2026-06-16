@@ -9,10 +9,9 @@ const gtts = require('google-tts-api');
 const { exec, spawn } = require('child_process');
 const Logger = require('./logger');
 const { getAvailableModels, formatModelRef } = require('./ollamaModels');
+const { createSecurityMiddleware } = require('./security');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
@@ -22,6 +21,22 @@ const OLLAMA_BIN = process.env.OLLAMA_BIN || 'ollama';
 
 // instantiate logger early so top-level functions (loadRules, routes) can use it without causing a TDZ
 const logger = new Logger({ bufferSize: 2000 });
+const security = createSecurityMiddleware(logger);
+
+app.use(security.requestLogger);
+app.use(security.securityHeaders);
+app.use(cors({
+  origin: security.config.corsOrigin || false,
+  credentials: true
+}));
+app.use(express.json());
+
+app.get('/auth/login', security.login);
+app.get('/auth/start', security.startLogin);
+app.get('/auth/register', security.register);
+app.get('/auth/callback', security.callback);
+app.post('/auth/logout', security.logout);
+app.use(security.authenticate);
 
 // Asset version for cache-busting (set once when server starts)
 const ASSET_VERSION = Date.now();
@@ -229,6 +244,7 @@ app.get('/api/stream', applyAiRules, async (req, res) => {
   const prompt = req.query.prompt || '';
 
   const payload = { model, prompt };
+  logger.info(`Streaming chat request using model ${model}`);
 
   try {
     const resp = await axios.post(`${OLLAMA_URL}/api/generate`, payload, {
@@ -371,6 +387,97 @@ app.post('/api/control/reboot', (req, res) => {
   }
 });
 
+app.get('/api/ollama/monitor/details', async (req, res) => {
+  const request = async (method, endpoint, data) => {
+    try {
+      const resp = await axios({
+        method,
+        url: `${OLLAMA_URL}${endpoint}`,
+        data,
+        timeout: 10000,
+        headers: { 'Content-Type': 'application/json' }
+      });
+      return { ok: true, data: resp.data };
+    } catch (err) {
+      return { ok: false, error: err?.response?.data || err.message || String(err) };
+    }
+  };
+
+  const [version, tags, running] = await Promise.all([
+    request('get', '/api/version'),
+    request('get', '/api/tags'),
+    request('get', '/api/ps')
+  ]);
+
+  res.json({
+    ok: version.ok || tags.ok || running.ok,
+    data: {
+      url: OLLAMA_URL,
+      defaultModel: DEFAULT_MODEL,
+      version: version.data || null,
+      models: tags.data?.models || [],
+      running: running.data?.models || [],
+      errors: {
+        version: version.ok ? null : version.error,
+        models: tags.ok ? null : tags.error,
+        running: running.ok ? null : running.error
+      }
+    }
+  });
+});
+
+app.post('/api/ollama/show', async (req, res) => {
+  const model = req.body.model;
+  if (!model) return res.status(400).json({ ok: false, error: 'model required' });
+
+  try {
+    const resp = await axios.post(`${OLLAMA_URL}/api/show`, { model }, { timeout: 30000 });
+    res.json({ ok: true, data: resp.data });
+  } catch (err) {
+    logger.error(`ollama show ${model} failed`, err?.response?.data || err.message || err);
+    res.status(500).json({ ok: false, error: err?.response?.data || err.message || String(err) });
+  }
+});
+
+app.post('/api/ollama/load', async (req, res) => {
+  const model = req.body.model;
+  const keepAlive = req.body.keepAlive || '5m';
+  if (!model) return res.status(400).json({ ok: false, error: 'model required' });
+
+  try {
+    logger.info(`Loading model ${model} with keep_alive ${keepAlive}`);
+    const resp = await axios.post(`${OLLAMA_URL}/api/generate`, {
+      model,
+      prompt: '',
+      keep_alive: keepAlive,
+      stream: false
+    }, { timeout: 120000 });
+    res.json({ ok: true, data: resp.data });
+  } catch (err) {
+    logger.error(`ollama load ${model} failed`, err?.response?.data || err.message || err);
+    res.status(500).json({ ok: false, error: err?.response?.data || err.message || String(err) });
+  }
+});
+
+app.post('/api/ollama/unload', async (req, res) => {
+  const model = req.body.model;
+  if (!model) return res.status(400).json({ ok: false, error: 'model required' });
+
+  try {
+    logger.info(`Unloading model ${model}`);
+    const resp = await axios.post(`${OLLAMA_URL}/api/generate`, {
+      model,
+      prompt: '',
+      keep_alive: 0,
+      stream: false
+    }, { timeout: 30000 });
+    res.json({ ok: true, data: resp.data });
+  } catch (err) {
+    logger.error(`ollama unload ${model} failed`, err?.response?.data || err.message || err);
+    res.status(500).json({ ok: false, error: err?.response?.data || err.message || String(err) });
+  }
+});
+
 app.post('/api/control/shutdown', (req, res) => {
   logger.info('Shutdown requested via API');
   res.json({ ok: true, msg: 'Shutting down server' });
@@ -429,4 +536,5 @@ app.get('*', (req, res) => {
 // start server
 const server = app.listen(PORT, () => {
   logger.info(`Server listening on http://localhost:${PORT} — proxying Ollama at ${OLLAMA_URL}`);
+  logger.info(`Security middleware ${security.config.enabled ? 'enabled' : 'disabled'}`);
 });

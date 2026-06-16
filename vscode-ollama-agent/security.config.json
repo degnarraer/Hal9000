@@ -1,0 +1,98 @@
+{
+  "settings": [
+    {
+      "key": "enabled",
+      "value": false,
+      "description": "Require security middleware authentication before serving the app."
+    },
+    {
+      "key": "secureCookies",
+      "value": false,
+      "description": "Set true only when the app is served over HTTPS."
+    },
+    {
+      "key": "sessionTtlMs",
+      "value": 28800000,
+      "description": "Browser login session lifetime in milliseconds."
+    },
+    {
+      "key": "corsOrigin",
+      "value": "",
+      "description": "Allowed browser origin for cross-origin API calls. Leave empty for same-origin only."
+    }
+  ],
+  "oidc": [
+    {
+      "key": "provider",
+      "value": "keycloak",
+      "description": "Human-readable provider label used for audit and login UI."
+    },
+    {
+      "key": "issuer",
+      "env": "OIDC_ISSUER",
+      "fallbackValue": "http://localhost:8080/realms/ollama-agent",
+      "description": "OIDC issuer URL. For Keycloak use http://host:port/realms/<realm>."
+    },
+    {
+      "key": "clientId",
+      "env": "OIDC_CLIENT_ID",
+      "fallbackValue": "ollama-agent",
+      "description": "OIDC client ID."
+    },
+    {
+      "key": "clientSecret",
+      "env": "OIDC_CLIENT_SECRET",
+      "description": "OIDC client secret. Keep the value in .env, not in this file."
+    },
+    {
+      "key": "redirectUri",
+      "env": "OIDC_REDIRECT_URI",
+      "fallbackValue": "http://localhost:3000/auth/callback",
+      "description": "Redirect URI registered for this web application."
+    },
+    {
+      "key": "registrationEndpoint",
+      "env": "OIDC_REGISTRATION_ENDPOINT",
+      "fallbackValue": "",
+      "description": "Optional user registration URL. For Keycloak this is derived from the issuer when empty."
+    }
+  ],
+  "allowlists": [
+    {
+      "type": "user",
+      "value": "",
+      "description": "Optional allowed user email or UPN. Add one row per user."
+    },
+    {
+      "type": "group",
+      "value": "",
+      "description": "Optional allowed OIDC group name or ID. Add one row per group."
+    }
+  ],
+  "routes": [
+    {
+      "method": "POST",
+      "pattern": "/auth/logout",
+      "security": "authenticated",
+      "description": "Logout endpoint."
+    },
+    {
+      "method": "GET",
+      "pattern": "/auth/*",
+      "security": "public",
+      "description": "Authentication endpoints."
+    },
+    {
+      "method": "*",
+      "pattern": "/api/*",
+      "security": "authenticated",
+      "description": "All application APIs, including Ollama proxy and controls."
+    },
+    {
+      "method": "*",
+      "pattern": "/*",
+      "security": "authenticated",
+      "description": "Browser UI and static assets."
+    }
+  ]
+}

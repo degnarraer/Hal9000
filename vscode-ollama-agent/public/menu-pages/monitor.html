@@ -1,5 +1,43 @@
 <section class="panel-view">
   <h3>Ollama Monitor</h3>
+  <div class="monitor-toolbar">
+    <button id="refreshMonitor" type="button">
+      <i data-lucide="refresh-cw"></i>
+      Refresh
+    </button>
+    <label class="monitor-toggle">
+      <input id="autoRefreshMonitor" type="checkbox">
+      Auto
+    </label>
+  </div>
+
+  <div id="monitorSummary" class="monitor-summary"></div>
+
+  <div class="monitor-grid">
+    <section class="monitor-card">
+      <h4>Loaded Models</h4>
+      <div id="loadedModels" class="monitor-list"></div>
+    </section>
+
+    <section class="monitor-card">
+      <h4>Installed Models</h4>
+      <div class="monitor-control-row">
+        <select id="monitorModelSelect" aria-label="Select model to inspect"></select>
+        <button id="inspectModel" type="button">Inspect</button>
+      </div>
+      <div class="monitor-control-row">
+        <select id="keepAliveSelect" aria-label="Keep alive duration">
+          <option value="5m">5m</option>
+          <option value="30m">30m</option>
+          <option value="1h">1h</option>
+          <option value="-1">Keep loaded</option>
+        </select>
+        <button id="loadModel" type="button">Load</button>
+        <button id="unloadModel" type="button">Unload</button>
+      </div>
+    </section>
+  </div>
+
+  <pre id="modelDetails" class="monitor-output">(select a model to inspect)</pre>
   <pre id="monitorOutput" class="monitor-output">(no data)</pre>
-  <button id="refreshMonitor" type="button">Refresh</button>
 </section>
