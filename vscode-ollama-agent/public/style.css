@@ -7,6 +7,8 @@
 .login-panel{padding:34px;display:flex;flex-direction:column;justify-content:center;background:rgba(0,0,0,0.13)}
 .login-topline{height:30px;display:inline-flex;align-items:center;gap:8px;align-self:flex-start;padding:0 10px;border:1px solid rgba(0,224,255,0.16);border-radius:6px;background:rgba(0,224,255,0.045);color:#bff9ff;font-size:12px;text-transform:uppercase;margin-bottom:30px}
 .login-status-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px rgba(0,224,255,0.65)}
+.login-status-dot.error{background:#ff5f7a;box-shadow:0 0 12px rgba(255,95,122,0.65)}
+.login-error-shell{grid-template-columns:1fr;width:min(520px,100%)}
 .login-brand{display:flex;gap:14px;align-items:center}
 .login-brand.compact{align-items:flex-start}
 .login-mark{width:60px;height:60px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#00121a;display:grid;place-items:center;font-weight:800;letter-spacing:0;box-shadow:0 12px 28px rgba(0,224,255,0.12)}
@@ -142,7 +144,14 @@
 .panel-icon-btn{width:36px;height:36px;padding:0;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:rgba(255,255,255,0.02);color:var(--muted);display:flex;align-items:center;justify-content:center;cursor:pointer}
 .panel-icon-btn:hover{color:var(--accent);border-color:rgba(0,224,255,0.22);background:rgba(0,224,255,0.06)}
 .panel-icon-btn[hidden]{visibility:hidden;display:flex}
-.panel-body{height:calc(100vh - 72px);overflow:auto;padding-top:12px}
+.account-panel{display:grid;grid-template-columns:40px minmax(0,1fr) 36px;gap:10px;align-items:center;margin:10px 0 4px;padding:10px;border:1px solid rgba(255,255,255,0.06);border-radius:8px;background:linear-gradient(135deg,rgba(0,224,255,0.055),rgba(124,92,255,0.035))}
+.account-avatar{width:40px;height:40px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:rgba(0,224,255,0.08);border:1px solid rgba(0,224,255,0.14);color:var(--accent)}
+.account-details{min-width:0;display:flex;flex-direction:column;gap:3px}
+.account-details strong{font-size:13px;color:#f1f6ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.account-details span{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.account-panel .panel-icon-btn{color:#bfc0d8}
+.account-panel .panel-icon-btn:disabled{opacity:.55;cursor:wait}
+.panel-body{height:calc(100vh - 138px);overflow:auto;padding-top:12px}
 .panel-body button{padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:var(--muted)}
 .menu-landing{display:flex;flex-direction:column;gap:10px}
 .menu-item{width:100%;min-height:76px;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:linear-gradient(135deg,rgba(255,255,255,0.035),rgba(0,0,0,0.02));color:#dfe9ff;display:grid;grid-template-columns:34px 1fr;gap:12px;align-items:center;text-align:left;cursor:pointer}

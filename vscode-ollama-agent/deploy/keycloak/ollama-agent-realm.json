@@ -16,10 +16,12 @@
       "clientAuthenticatorType": "client-secret",
       "secret": "change-me-before-production",
       "redirectUris": [
+        "http://localhost:3000/auth/callback",
         "http://app.localhost/auth/callback",
         "https://app.localhost/auth/callback"
       ],
       "webOrigins": [
+        "http://localhost:3000",
         "http://app.localhost",
         "https://app.localhost"
       ],

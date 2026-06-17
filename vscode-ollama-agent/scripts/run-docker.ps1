@@ -1,8 +1,3 @@
-param(
-  [Parameter(ValueFromRemainingArguments = $true)]
-  [string[]]$DockerArgs
-)
-
 $ErrorActionPreference = 'Stop'
 
 $knownPaths = @(
@@ -20,5 +15,5 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
   throw "Docker CLI was not found. Run npm run server:install:persist-path, then restart VS Code."
 }
 
-& docker @DockerArgs
+& docker @args
 exit $LASTEXITCODE

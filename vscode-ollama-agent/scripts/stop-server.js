@@ -34,6 +34,29 @@ function forceStopByPort(reason) {
   });
 }
 
+function verifyStoppedThenExit() {
+  if (process.platform !== 'win32') return;
+
+  setTimeout(() => {
+    const script = [
+      `$pids = Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue |`,
+      '  Select-Object -ExpandProperty OwningProcess -Unique;',
+      'if (-not $pids) { exit 0 }',
+      '$pids | ForEach-Object { Stop-Process -Id $_ -Force }'
+    ].join(' ');
+
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true }, (err) => {
+      if (err) {
+        console.error(`Server reported shutdown, but port ${port} is still listening. Cleanup failed: ${err.message}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log(`Verified port ${port} is free.`);
+    });
+  }, 1200);
+}
+
 const req = http.request(
   {
     host,
@@ -49,6 +72,7 @@ const req = http.request(
     res.on('end', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         console.log(`Server on http://${host}:${port} is shutting down.`);
+        verifyStoppedThenExit();
         return;
       }
 

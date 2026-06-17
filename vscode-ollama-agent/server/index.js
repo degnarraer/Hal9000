@@ -37,6 +37,17 @@ app.get('/auth/register', security.register);
 app.get('/auth/callback', security.callback);
 app.use(security.authenticate);
 app.post('/auth/logout', security.logout);
+app.get('/api/auth/me', (req, res) => {
+  const user = req.user || {};
+  res.json({
+    ok: true,
+    data: {
+      name: user.name || user.preferred_username || user.email || 'Signed in user',
+      email: user.email || user.preferred_username || user.upn || '',
+      subject: user.sub || ''
+    }
+  });
+});
 
 // Asset version for cache-busting (set once when server starts)
 const ASSET_VERSION = Date.now();
@@ -209,6 +220,38 @@ function applyAiRules(req, res, next) {
   next();
 }
 
+function getErrorText(err) {
+  const data = err?.response?.data;
+
+  if (Buffer.isBuffer(data)) return data.toString('utf8');
+  if (typeof data === 'string') return data;
+  if (data && typeof data === 'object' && typeof data.pipe !== 'function') {
+    try {
+      return JSON.stringify(data);
+    } catch (jsonErr) {
+      return err?.message || String(err);
+    }
+  }
+
+  return err?.message || String(err);
+}
+
+function sendSseError(res, err) {
+  const error = getErrorText(err);
+  const status = err?.response?.status || 500;
+
+  if (!res.headersSent) {
+    res.status(status);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders && res.flushHeaders();
+  }
+
+  res.write(`event: error\ndata: ${JSON.stringify(error)}\n\n`);
+  res.end();
+}
+
 // expose rules endpoints
 app.get('/api/rules', (req, res) => {
   res.json({ ok: true, data: AI_RULES });
@@ -233,8 +276,9 @@ app.post('/api/chat', applyAiRules, async (req, res) => {
 
     res.json({ ok: true, data: resp.data });
   } catch (err) {
-    logger.error('chat error', err?.response?.data || err.message || err);
-    res.status(500).json({ ok: false, error: err?.response?.data || err.message || String(err) });
+    const error = getErrorText(err);
+    logger.error('chat error', error);
+    res.status(err?.response?.status || 500).json({ ok: false, error });
   }
 });
 
@@ -268,11 +312,12 @@ app.get('/api/stream', applyAiRules, async (req, res) => {
     });
 
     stream.on('end', () => { res.write('event: done\ndata: [DONE]\n\n'); res.end(); });
-    stream.on('error', (err) => { logger.error('stream error', err); res.write(`event: error\ndata: ${JSON.stringify(String(err))}\n\n`); res.end(); });
+    stream.on('error', (err) => { logger.error('stream error', getErrorText(err)); sendSseError(res, err); });
     req.on('close', () => { stream.destroy && stream.destroy(); });
   } catch (err) {
-    logger.error('stream setup error', err?.response?.data || err.message || err);
-    res.status(500).json({ ok: false, error: err?.response?.data || err.message || String(err) });
+    const error = getErrorText(err);
+    logger.error('stream setup error', error);
+    sendSseError(res, err);
   }
 });
 
@@ -309,14 +354,24 @@ app.post('/api/ollama/pull', (req, res) => {
   const model = req.body.model;
   if (!model) return res.status(400).json({ ok: false, error: 'model required' });
   logger.info(`Starting ollama pull ${model}`);
-  exec(`"${OLLAMA_BIN}" pull ${model}`, { timeout: 5 * 60 * 1000 }, (err, stdout, stderr) => {
-    if (err) {
-      logger.error(`ollama pull ${model} failed`, stderr || err.message);
-      return res.status(500).json({ ok: false, error: `Pull failed: ${stderr || err.message}` });
-    }
-    logger.info(`ollama pull ${model} succeeded`);
-    res.json({ ok: true, out: stdout });
-  });
+
+  axios.post(`${OLLAMA_URL}/api/pull`, { model, stream: false }, { timeout: 30 * 60 * 1000 })
+    .then((resp) => {
+      logger.info(`ollama pull ${model} succeeded via HTTP API`);
+      res.json({ ok: true, data: resp.data });
+    })
+    .catch((httpErr) => {
+      logger.warn(`ollama HTTP pull ${model} failed, trying CLI fallback`, getErrorText(httpErr));
+      exec(`"${OLLAMA_BIN}" pull ${model}`, { timeout: 30 * 60 * 1000 }, (err, stdout, stderr) => {
+        if (err) {
+          const error = stderr || err.message;
+          logger.error(`ollama pull ${model} failed`, error);
+          return res.status(500).json({ ok: false, error: `Pull failed: ${error}` });
+        }
+        logger.info(`ollama pull ${model} succeeded via CLI`);
+        res.json({ ok: true, out: stdout });
+      });
+    });
 });
 
 // Remove a model via the ollama CLI
@@ -324,14 +379,28 @@ app.post('/api/ollama/remove', (req, res) => {
   const model = req.body.model;
   if (!model) return res.status(400).json({ ok: false, error: 'model required' });
   logger.info(`Starting ollama rm ${model}`);
-  exec(`"${OLLAMA_BIN}" rm ${model}`, { timeout: 2 * 60 * 1000 }, (err, stdout, stderr) => {
-    if (err) {
-      logger.error(`ollama rm ${model} failed`, stderr || err.message);
-      return res.status(500).json({ ok: false, error: `Remove failed: ${stderr || err.message}` });
-    }
-    logger.info(`ollama rm ${model} succeeded`);
-    res.json({ ok: true, out: stdout });
-  });
+
+  axios.delete(`${OLLAMA_URL}/api/delete`, {
+    data: { model },
+    timeout: 2 * 60 * 1000,
+    headers: { 'Content-Type': 'application/json' }
+  })
+    .then((resp) => {
+      logger.info(`ollama rm ${model} succeeded via HTTP API`);
+      res.json({ ok: true, data: resp.data });
+    })
+    .catch((httpErr) => {
+      logger.warn(`ollama HTTP rm ${model} failed, trying CLI fallback`, getErrorText(httpErr));
+      exec(`"${OLLAMA_BIN}" rm ${model}`, { timeout: 2 * 60 * 1000 }, (err, stdout, stderr) => {
+        if (err) {
+          const error = stderr || err.message;
+          logger.error(`ollama rm ${model} failed`, error);
+          return res.status(500).json({ ok: false, error: `Remove failed: ${error}` });
+        }
+        logger.info(`ollama rm ${model} succeeded via CLI`);
+        res.json({ ok: true, out: stdout });
+      });
+    });
 });
 
 // Monitor endpoint: try HTTP status, else run `ollama status` and return text
@@ -399,7 +468,7 @@ app.get('/api/ollama/monitor/details', async (req, res) => {
       });
       return { ok: true, data: resp.data };
     } catch (err) {
-      return { ok: false, error: err?.response?.data || err.message || String(err) };
+      return { ok: false, error: getErrorText(err) };
     }
   };
 
@@ -434,8 +503,9 @@ app.post('/api/ollama/show', async (req, res) => {
     const resp = await axios.post(`${OLLAMA_URL}/api/show`, { model }, { timeout: 30000 });
     res.json({ ok: true, data: resp.data });
   } catch (err) {
-    logger.error(`ollama show ${model} failed`, err?.response?.data || err.message || err);
-    res.status(500).json({ ok: false, error: err?.response?.data || err.message || String(err) });
+    const error = getErrorText(err);
+    logger.error(`ollama show ${model} failed`, error);
+    res.status(err?.response?.status || 500).json({ ok: false, error });
   }
 });
 
@@ -454,8 +524,9 @@ app.post('/api/ollama/load', async (req, res) => {
     }, { timeout: 120000 });
     res.json({ ok: true, data: resp.data });
   } catch (err) {
-    logger.error(`ollama load ${model} failed`, err?.response?.data || err.message || err);
-    res.status(500).json({ ok: false, error: err?.response?.data || err.message || String(err) });
+    const error = getErrorText(err);
+    logger.error(`ollama load ${model} failed`, error);
+    res.status(err?.response?.status || 500).json({ ok: false, error });
   }
 });
 
@@ -473,8 +544,9 @@ app.post('/api/ollama/unload', async (req, res) => {
     }, { timeout: 30000 });
     res.json({ ok: true, data: resp.data });
   } catch (err) {
-    logger.error(`ollama unload ${model} failed`, err?.response?.data || err.message || err);
-    res.status(500).json({ ok: false, error: err?.response?.data || err.message || String(err) });
+    const error = getErrorText(err);
+    logger.error(`ollama unload ${model} failed`, error);
+    res.status(err?.response?.status || 500).json({ ok: false, error });
   }
 });
 

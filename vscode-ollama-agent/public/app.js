@@ -48,7 +48,7 @@ async function sendMessage() {
 }
 
 function getSelectedModel() {
-  return modelSelect?.value || defaultModel;
+  return modelSelect?.value || '';
 }
 
 function normalizeModelName(item) {
@@ -75,10 +75,11 @@ async function loadChatModels() {
 
     if (models.length === 0) {
       const option = document.createElement('option');
-      option.value = defaultModel;
-      option.textContent = `${defaultModel} (default)`;
+      option.value = '';
+      option.textContent = 'No models installed';
       modelSelect.appendChild(option);
-      modelSelect.value = defaultModel;
+      modelSelect.value = '';
+      send.disabled = true;
       return;
     }
 
@@ -91,14 +92,16 @@ async function loadChatModels() {
 
     modelSelect.value = models.includes(previousValue) ? previousValue : models[0];
     localStorage.setItem(selectedModelKey, modelSelect.value);
+    send.disabled = false;
   } catch (err) {
     console.warn('Failed to load chat models', err);
     if (!modelSelect.options.length) {
       const option = document.createElement('option');
-      option.value = defaultModel;
-      option.textContent = defaultModel;
+      option.value = '';
+      option.textContent = 'Models unavailable';
       modelSelect.appendChild(option);
     }
+    send.disabled = true;
   } finally {
     modelSelect.disabled = false;
   }
@@ -240,10 +243,15 @@ function setAiVoiceActive(isActive) {
 
 function sendPrompt(prompt) {
   if (!prompt) return;
+  const model = getSelectedModel();
+  if (!model) {
+    addMessage('bot', 'No Ollama models are installed. Open Models and install one before chatting.');
+    return;
+  }
+
   addMessage('user', prompt);
   input.value = '';
 
-  const model = getSelectedModel();
   const url = `/api/stream?model=${encodeURIComponent(model)}&prompt=${encodeURIComponent(prompt)}`;
 
   const evt = new EventSource(url);
@@ -260,7 +268,19 @@ function sendPrompt(prompt) {
     evt.close();
     speakText(partial);
   });
-  evt.onerror = (err) => { console.error('SSE error', err); evt.close(); };
+  evt.addEventListener('error', (event) => {
+    console.error('SSE error', event);
+    if (event.data) {
+      try {
+        botEl.textContent = JSON.parse(event.data);
+      } catch (err) {
+        botEl.textContent = event.data;
+      }
+    } else if (!partial) {
+      botEl.textContent = 'Ollama did not return a response. Check the Monitor screen for service status.';
+    }
+    evt.close();
+  });
 }
 
 send.addEventListener('click', () => {

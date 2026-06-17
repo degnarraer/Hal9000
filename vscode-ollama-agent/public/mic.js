@@ -4,6 +4,11 @@
 let audioCtx, analyser, dataArray, sourceNode, mediaStream;
 let animationId;
 let finalTranscriptBuffer = '';
+let recognition;
+let recognitionRestartTimer;
+let manuallyStoppingRecognition = false;
+let speechRecognitionFailed = false;
+let detectedAudioWhileSpeechFailed = false;
 const MAX_TRANSCRIPT_DISPLAY = 180;
 
 const canvas = document.getElementById('waveform');
@@ -27,6 +32,9 @@ async function startMic() {
   sourceNode.connect(analyser);
 
   console.log('audio started, bufferLength=', bufferLength);
+  speechRecognitionFailed = false;
+  detectedAudioWhileSpeechFailed = false;
+  setMicTranscript('Listening...');
   drawWaveform();
   startSpeechRecognition();
 }
@@ -39,7 +47,10 @@ function stopMic() {
   audioCtx && audioCtx.close();
   analyser = null;
   dataArray = null;
+  speechRecognitionFailed = false;
+  detectedAudioWhileSpeechFailed = false;
   stopSpeechRecognition();
+  setMicTranscript('');
   if (micToggle) {
     micToggle.classList.remove('active');
   }
@@ -70,7 +81,9 @@ function drawWaveform() {
 
   const step = Math.max(1, Math.floor(dataArray.length / width));
   let x = 0;
+  let level = 0;
   for (let i = 0; i < dataArray.length; i += step) {
+    level += Math.abs(dataArray[i] - 128);
     const y = (dataArray[i] / 255) * height;
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
@@ -78,17 +91,23 @@ function drawWaveform() {
   }
   ctx.stroke();
 
+  const averageLevel = level / Math.max(1, x);
+  if (speechRecognitionFailed && averageLevel > 4 && !detectedAudioWhileSpeechFailed) {
+    detectedAudioWhileSpeechFailed = true;
+    setMicTranscript('Mic audio detected. Browser speech recognition service is unavailable.');
+  }
+
   animationId = requestAnimationFrame(drawWaveform);
 }
 
-// Web Speech API for voice-to-text
-let recognition;
 function startSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
     vttOutput.textContent = 'SpeechRecognition API not supported in this browser.';
     return;
   }
+  clearTimeout(recognitionRestartTimer);
+  manuallyStoppingRecognition = false;
   recognition = new SpeechRecognition();
   recognition.continuous = true;
   recognition.interimResults = true;
@@ -110,17 +129,45 @@ function startSpeechRecognition() {
 
     setMicTranscript([final, interim].filter(Boolean).join(' ').trim());
   };
-  recognition.onerror = (e) => { console.error('Speech recognition error', e); };
+  recognition.onerror = (e) => {
+    if (e.error === 'no-speech') {
+      setMicTranscript('Listening...');
+      return;
+    }
+
+    if (e.error === 'network') {
+      speechRecognitionFailed = true;
+      manuallyStoppingRecognition = true;
+      setMicTranscript('Mic is active. Browser speech recognition cannot reach its service.');
+      console.warn('Speech recognition service unavailable', e);
+      return;
+    }
+
+    const recoverable = ['aborted', 'audio-capture'].includes(e.error);
+    const message = e.message || e.error || 'Speech recognition failed';
+    if (recoverable) {
+      console.warn('Speech recognition warning', e);
+      setMicTranscript(`Voice input paused: ${message}`);
+    } else {
+      console.error('Speech recognition error', e);
+      setMicTranscript(`Voice input error: ${message}`);
+    }
+  };
   recognition.onend = () => {
-    if (micToggle.dataset.running === '1') {
-      try { recognition.start(); } catch (e) { console.warn('Speech recognition restart failed', e); }
+    if (!manuallyStoppingRecognition && micToggle.dataset.running === '1') {
+      recognitionRestartTimer = setTimeout(() => {
+        try { recognition.start(); } catch (e) { console.warn('Speech recognition restart failed', e); }
+      }, 350);
     }
   };
   try { recognition.start(); } catch (e) { console.warn('Speech recognition start failed', e); }
 }
 
 function stopSpeechRecognition() {
+  manuallyStoppingRecognition = true;
+  clearTimeout(recognitionRestartTimer);
   recognition && recognition.stop();
+  recognition = null;
 }
 
 function submitVoicePrompt(prompt) {

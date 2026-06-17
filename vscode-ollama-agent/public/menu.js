@@ -15,6 +15,16 @@ panel.innerHTML = `
       <i data-lucide="x"></i>
     </button>
   </div>
+  <div id="accountPanel" class="account-panel">
+    <div class="account-avatar"><i data-lucide="user"></i></div>
+    <div class="account-details">
+      <strong id="accountName">Signed in</strong>
+      <span id="accountEmail">Loading account...</span>
+    </div>
+    <button id="signOutBtn" class="panel-icon-btn" type="button" aria-label="Sign out" title="Sign out">
+      <i data-lucide="log-out"></i>
+    </button>
+  </div>
   <div id="menuContent" class="panel-body"></div>
 `;
 document.body.appendChild(panel);
@@ -27,6 +37,9 @@ const mainContent = document.getElementById('mainContent');
 const chatContainer = document.querySelector('.chat-container');
 const menuContent = document.getElementById('menuContent');
 const closeBtn = document.getElementById('closePanel');
+const accountName = document.getElementById('accountName');
+const accountEmail = document.getElementById('accountEmail');
+const signOutBtn = document.getElementById('signOutBtn');
 
 const mainPage = document.createElement('section');
 mainPage.id = 'mainMenuPage';
@@ -59,6 +72,7 @@ function setPanelOpen(isOpen) {
     menuBtn.classList.add('open');
     menuBtn.setAttribute('aria-expanded', 'true');
     main?.classList.add('panel-open');
+    fetchAccount();
     loadMenuLanding();
   } else {
     panel.style.transform = 'translateX(100%)';
@@ -67,6 +81,32 @@ function setPanelOpen(isOpen) {
     menuBtn.classList.remove('open');
     menuBtn.setAttribute('aria-expanded', 'false');
     main?.classList.remove('panel-open');
+  }
+}
+
+async function fetchAccount() {
+  if (!accountName || !accountEmail) return;
+
+  try {
+    const response = await fetch('/api/auth/me', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Unable to load account');
+    const user = json.data || {};
+    accountName.textContent = user.name || 'Signed in';
+    accountEmail.textContent = user.email || user.subject || 'Authenticated session';
+  } catch (err) {
+    accountName.textContent = 'Signed in';
+    accountEmail.textContent = 'Account unavailable';
+  }
+}
+
+async function signOut() {
+  signOutBtn?.setAttribute('disabled', 'disabled');
+  try {
+    await fetch('/auth/logout', { method: 'POST' });
+  } finally {
+    window.location.href = '/auth/login';
   }
 }
 
@@ -600,9 +640,11 @@ menuBtn.addEventListener('click', () => {
   setPanelOpen(!panel.classList.contains('open'));
 });
 closeBtn.addEventListener('click', () => setPanelOpen(false));
+signOutBtn?.addEventListener('click', signOut);
 
 loadMenuLanding();
 renderMenuIcons();
+fetchAccount();
 
 window.__menu = {
   open: () => setPanelOpen(true),

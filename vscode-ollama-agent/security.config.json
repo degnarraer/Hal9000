@@ -84,6 +84,42 @@
     },
     {
       "method": "*",
+      "pattern": "/style.css",
+      "security": "public",
+      "description": "Stylesheet required by the public login screen."
+    },
+    {
+      "method": "*",
+      "pattern": "/vendor/lucide/*",
+      "security": "public",
+      "description": "Icon library required by the public login screen."
+    },
+    {
+      "method": "*",
+      "pattern": "/app.js",
+      "security": "authenticated",
+      "description": "Browser application script."
+    },
+    {
+      "method": "*",
+      "pattern": "/mic.js",
+      "security": "authenticated",
+      "description": "Browser microphone script required for voice input."
+    },
+    {
+      "method": "*",
+      "pattern": "/menu.js",
+      "security": "authenticated",
+      "description": "Browser menu script."
+    },
+    {
+      "method": "*",
+      "pattern": "/menu-pages/*",
+      "security": "authenticated",
+      "description": "Browser menu page partials loaded by menu.js."
+    },
+    {
+      "method": "*",
       "pattern": "/api/*",
       "security": "authenticated",
       "description": "All application APIs, including Ollama proxy and controls."

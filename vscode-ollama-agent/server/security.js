@@ -7,6 +7,7 @@ const sessions = new Map();
 const authStates = new Map();
 let oidcConfigCache;
 let jwksCache;
+const AUTH_STATE_TTL_MS = 30 * 60 * 1000;
 
 function parseBool(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
@@ -75,10 +76,56 @@ function routePolicy(req, config) {
   return (config.table.routes || []).find(rule => routeMatches(rule, req)) || { security: 'authenticated', pattern: '<default>' };
 }
 
+function isPublicBrowserAsset(req) {
+  if (!['GET', 'HEAD'].includes(req.method)) return false;
+  return [
+    '/style.css'
+  ].includes(req.path) || req.path.startsWith('/vendor/lucide/');
+}
+
 function statusIcon(statusCode, securityPassed) {
   if (!securityPassed || statusCode >= 400) return '\u{1F534}';
   if (statusCode >= 300) return '\u{1F7E1}';
   return '\u{1F7E2}';
+}
+
+function authErrorPage(message) {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Authentication failed - Ollama Assistant</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="login-body">
+  <main class="login-shell login-error-shell">
+    <section class="login-panel" aria-label="Authentication error">
+      <div class="login-topline">
+        <span class="login-status-dot error"></span>
+        <span>Authentication failed</span>
+      </div>
+      <div class="login-copy">
+        <h2>Could not complete sign in</h2>
+        <p>${escapeHtml(message || 'The identity provider did not complete the authentication flow.')}</p>
+      </div>
+      <div class="login-actions">
+        <a class="login-primary" href="/auth/login">Return to sign in</a>
+      </div>
+      <p class="login-note">If this keeps happening, check the server logs for the OIDC callback error.</p>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }
 
 function requestLogger(logger, config) {
@@ -102,7 +149,7 @@ function securityHeaders(config) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=()');
     if (config.secureCookies) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
     next();
   };
@@ -198,6 +245,11 @@ function createSecurityMiddleware(logger) {
   }
 
   async function authenticate(req, res, next) {
+    if (isPublicBrowserAsset(req)) {
+      markPassed(req, { name: 'public-asset' });
+      return next();
+    }
+
     const policy = routePolicy(req, config);
     if (policy.security === 'public') {
       markPassed(req, { name: 'public-route' });
@@ -257,7 +309,7 @@ function createSecurityMiddleware(logger) {
     const oidc = await oidcConfig(config);
     const state = crypto.randomUUID();
     const nonce = crypto.randomUUID();
-    authStates.set(state, { nonce, expiresAt: Date.now() + 10 * 60 * 1000 });
+    authStates.set(state, { nonce, expiresAt: Date.now() + AUTH_STATE_TTL_MS });
     const params = new URLSearchParams({
       client_id: config.clientId,
       response_type: 'code',
@@ -267,6 +319,10 @@ function createSecurityMiddleware(logger) {
       state,
       nonce
     });
+
+    if (mode === 'login') {
+      params.set('prompt', 'login');
+    }
 
     const keycloakRegistrationEndpoint = `${config.issuer.replace(/\/$/, '')}/protocol/openid-connect/registrations`;
     const endpoint = mode === 'register'
@@ -283,6 +339,16 @@ function createSecurityMiddleware(logger) {
   async function callback(req, res) {
     try {
       markPassed(req, { name: 'auth-callback' });
+      if (req.query.error) {
+        throw new Error(`${req.query.error}: ${req.query.error_description || 'OIDC provider returned an error'}`);
+      }
+      if (!req.query.code) {
+        throw new Error('Missing authorization code');
+      }
+      if (!req.query.state) {
+        throw new Error('Missing authorization state');
+      }
+
       const state = authStates.get(req.query.state);
       authStates.delete(req.query.state);
       if (!state || state.expiresAt < Date.now()) throw new Error('Invalid login state');
@@ -308,8 +374,10 @@ function createSecurityMiddleware(logger) {
       res.setHeader('Set-Cookie', cookie('ollama_agent_session', sessionId, { secure: config.secureCookies, maxAge: Math.floor(config.sessionTtlMs / 1000) }));
       res.redirect('/');
     } catch (err) {
-      logger.error(`OIDC callback failed: ${err.message}`);
-      res.status(401).send('Authentication failed');
+      const detail = err?.response?.data ? JSON.stringify(err.response.data) : err.message;
+      logger.error(`OIDC callback failed: ${detail}`);
+      console.error(`OIDC callback failed: ${detail}`);
+      res.status(401).send(authErrorPage(detail));
     }
   }
 
