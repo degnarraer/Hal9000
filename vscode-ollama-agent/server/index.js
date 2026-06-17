@@ -18,10 +18,44 @@ const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'llama2';
 // Support custom OLLAMA_BIN path (useful on Windows where ollama may not be on PATH)
 const OLLAMA_BIN = process.env.OLLAMA_BIN || 'ollama';
+const DEPLOYMENT_ENV = process.env.DEPLOYMENT_ENV || process.env.NODE_ENV || 'development';
 
 // instantiate logger early so top-level functions (loadRules, routes) can use it without causing a TDZ
 const logger = new Logger({ bufferSize: 2000 });
 const security = createSecurityMiddleware(logger);
+
+function validateProductionConfig() {
+  if (DEPLOYMENT_ENV !== 'production') return;
+
+  const unsafeSecretValues = new Set(['change-me-before-production', 'replace-with-generated-secret']);
+  const unsafeValues = [
+    ['OIDC_CLIENT_SECRET', process.env.OIDC_CLIENT_SECRET],
+    ['KEYCLOAK_ADMIN_PASSWORD', process.env.KEYCLOAK_ADMIN_PASSWORD],
+    ['KEYCLOAK_DB_PASSWORD', process.env.KEYCLOAK_DB_PASSWORD]
+  ].filter(([, value]) => !value || unsafeSecretValues.has(value));
+
+  if (unsafeValues.length > 0) {
+    throw new Error(`Production deployment has unsafe secret values: ${unsafeValues.map(([name]) => name).join(', ')}`);
+  }
+
+  if (String(process.env.SECURITY_SECURE_COOKIES || '').toLowerCase() !== 'true') {
+    throw new Error('Production deployment requires SECURITY_SECURE_COOKIES=true');
+  }
+
+  if (!String(process.env.OIDC_ISSUER || '').startsWith('https://')) {
+    throw new Error('Production deployment requires an HTTPS OIDC_ISSUER');
+  }
+
+  if (!String(process.env.OIDC_REDIRECT_URI || '').startsWith('https://')) {
+    throw new Error('Production deployment requires an HTTPS OIDC_REDIRECT_URI');
+  }
+
+  if (String(process.env.OIDC_ISSUER || '').includes('example.com') || String(process.env.OIDC_REDIRECT_URI || '').includes('example.com')) {
+    throw new Error('Production deployment requires real OIDC hostnames, not example.com placeholders');
+  }
+}
+
+validateProductionConfig();
 
 app.use(security.requestLogger);
 app.use(security.securityHeaders);
@@ -35,6 +69,10 @@ app.get('/auth/login', security.login);
 app.get('/auth/start', security.startLogin);
 app.get('/auth/register', security.register);
 app.get('/auth/callback', security.callback);
+app.get('/health', (req, res) => {
+  req.security = { passed: true, policy: 'public-health' };
+  res.json({ ok: true, service: 'app' });
+});
 app.use(security.authenticate);
 app.post('/auth/logout', security.logout);
 app.get('/api/auth/me', (req, res) => {

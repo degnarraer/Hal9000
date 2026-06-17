@@ -78,6 +78,12 @@
     },
     {
       "method": "GET",
+      "pattern": "/health",
+      "security": "public",
+      "description": "Minimal container health check endpoint. Does not expose user, auth, database, or Ollama details."
+    },
+    {
+      "method": "GET",
       "pattern": "/auth/*",
       "security": "public",
       "description": "Authentication endpoints."

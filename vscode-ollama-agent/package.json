@@ -16,6 +16,15 @@
     "docker:up": "powershell -ExecutionPolicy Bypass -File scripts/run-docker.ps1 compose up --build",
     "docker:down": "powershell -ExecutionPolicy Bypass -File scripts/run-docker.ps1 compose down",
     "docker:logs": "powershell -ExecutionPolicy Bypass -File scripts/run-docker.ps1 compose logs -f",
+    "docker:dev:config": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 dev config",
+    "docker:dev:up": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 dev up --build -d",
+    "docker:dev:down": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 dev down",
+    "docker:dev:logs": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 dev logs -f",
+    "docker:prod:config": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 prod config",
+    "docker:prod:up": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 prod up --build -d",
+    "docker:prod:down": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 prod down",
+    "docker:prod:logs": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 prod logs -f",
+    "secrets:generate": "node scripts/generate-secrets.js",
     "server:install": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1",
     "server:install:full": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -Full",
     "server:install:wsl": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -InstallWsl",
@@ -50,13 +59,16 @@
     ]
   },
   "dependencies": {
-    "axios": "^0.21.1",
+    "axios": "^1.18.0",
     "chart.js": "^4.3.0",
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "google-tts-api": "^2.0.1",
     "lucide": "^1.18.0"
+  },
+  "overrides": {
+    "axios": "^1.18.0"
   },
   "devDependencies": {
     "@types/node": "^14.14.37",
