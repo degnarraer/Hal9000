@@ -70,7 +70,7 @@ async function searchWeb(query, options = {}) {
     params: { q: query },
     timeout: Number(options.timeout || process.env.WEB_SEARCH_TIMEOUT_MS || 12000),
     headers: {
-      'User-Agent': 'BigHal/1.0 (+https://bighal.duckdns.org)',
+      'User-Agent': 'BobAssistant/1.0 (+https://bobassist.duckdns.org)',
       Accept: 'text/html,application/xhtml+xml'
     }
   });
@@ -86,7 +86,7 @@ function buildWebSummaryPrompt(userPrompt, query, results) {
   ].join('\n')).join('\n\n');
 
   return [
-    'You are Big Hal using a web search skill.',
+    'You are Bob using a web search skill.',
     'Summarize the search results for the user in a concise, helpful answer.',
     'Use only the sources below. If the sources are thin or conflicting, say so.',
     'Include a short "Sources" section with numbered links.',

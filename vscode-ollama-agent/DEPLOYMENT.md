@@ -8,9 +8,10 @@ This deployment keeps the public edge, app, identity provider, database, and Oll
 - `app`: Node/Ollama assistant server. Exposes port 3000 only to the Docker network.
 - `keycloak`: OIDC identity provider and account registration. Exposes Keycloak ports only to the Docker network.
 - `keycloak-db`: private PostgreSQL database for Keycloak users. Exposes port 5432 only to the Docker network.
+- `vaultwarden`: self-hosted Bitwarden-compatible vault for production secrets. Exposes its web service only to Caddy.
 - `ollama`: private Ollama service. Exposes port 11434 only to the Docker network.
 
-`keycloak-db` and `ollama` are not exposed to the host or internet.
+`keycloak-db`, `memory-db`, and `ollama` are not exposed to the host or internet.
 
 ## Container Boundaries
 
@@ -21,6 +22,7 @@ internet / browser
   -> caddy :80/:443
      -> app :3000
      -> keycloak :8080
+     -> vaultwarden :80
         -> keycloak-db :5432
      -> ollama :11434
 ```
@@ -91,6 +93,12 @@ Keycloak admin:
 http://auth.localhost/admin
 ```
 
+Vaultwarden:
+
+```txt
+http://vault.localhost
+```
+
 Default dev credentials:
 
 ```txt
@@ -113,6 +121,23 @@ ADMIN_BOOTSTRAP_TOKEN=<generated strong secret>
 After signing in as a matching bootstrap user, open the menu and use the shield-plus button beside your account. Local `app.localhost` development requests can also bootstrap the first admin.
 
 If you use Keycloak or another OIDC provider to send app roles, the app also recognizes `admin` or `administrator` in common role claims such as `roles`, `groups`, Keycloak realm roles, and `ollama-agent` client roles.
+
+## Secrets Management
+
+Vaultwarden is the human-facing source of truth for production secrets. The app still reads secrets from environment variables at startup, so there is no application wrapper around Vaultwarden and no runtime dependency on the vault being available.
+
+Use Vaultwarden to store:
+
+- `env/prod.env`
+- Keycloak admin and database passwords
+- OIDC client secrets
+- Yahoo OAuth secrets
+- DuckDNS tokens
+- backup encryption and rclone recovery notes
+
+When a value changes in Vaultwarden, update `env/prod.env`, redeploy the production stack, and confirm the matching service still starts. Keep `env/prod.env` out of git.
+
+The Vaultwarden admin panel is protected by `VAULTWARDEN_ADMIN_TOKEN`. Keep `VAULTWARDEN_SIGNUPS_ALLOWED=false` for production, create accounts by invitation, then disable invitations if you do not need ongoing onboarding.
 
 ## Multiple Docker Environments
 
@@ -174,18 +199,19 @@ For real production DNS, keep ports `80` and `443`.
 
    ```env
    DEPLOYMENT_ENV=production
-   APP_HOST=your-app.example.com
-   AUTH_HOST=auth.example.com
-   OIDC_ISSUER=https://auth.example.com/realms/ollama-agent
-   OIDC_REDIRECT_URI=https://your-app.example.com/auth/callback
+   APP_HOST=bobassist.duckdns.org
+   AUTH_HOST=bobassist-auth.duckdns.org
+   VAULT_HOST=bobassist-vault.duckdns.org
+   OIDC_ISSUER=https://bobassist-auth.duckdns.org/realms/ollama-agent
+   OIDC_REDIRECT_URI=https://bobassist.duckdns.org/auth/callback
    SECURITY_SECURE_COOKIES=true
    ```
 
 2. Update the Keycloak realm/client:
 
    - Client secret must match `OIDC_CLIENT_SECRET`.
-   - Valid redirect URI must include `https://your-app.example.com/auth/callback`.
-   - Web origin must include `https://your-app.example.com`.
+   - Valid redirect URI must include `https://bobassist.duckdns.org/auth/callback`.
+   - Web origin must include `https://bobassist.duckdns.org`.
 
 3. Use strong values for:
 
@@ -193,6 +219,8 @@ For real production DNS, keep ports `80` and `443`.
    OIDC_CLIENT_SECRET=
    KEYCLOAK_ADMIN_PASSWORD=
    KEYCLOAK_DB_PASSWORD=
+   MEMORY_DB_PASSWORD=
+   VAULTWARDEN_ADMIN_TOKEN=
    ```
 
    Generate starter values with:
@@ -206,8 +234,26 @@ For real production DNS, keep ports `80` and `443`.
 4. Keep these private:
 
    - `keycloak-db`
+   - `memory-db`
    - `ollama`
+   - `vaultwarden`
    - Docker volumes
-   - `.env`
+   - `env/prod.env`
 
-5. Back up the `keycloak_db_data` Docker volume.
+5. Configure encrypted backups:
+
+   ```env
+   BACKUP_DIR=backups
+   BACKUP_RCLONE_REMOTE=gdrive:hal9000-backups
+   BACKUP_AGE_RECIPIENT=age1...
+   ```
+
+   Install and configure `rclone` with a Google Drive remote first. Install `age` and set `BACKUP_AGE_RECIPIENT` so backups are encrypted before upload.
+
+6. Back up production:
+
+   ```bash
+   npm run backup:prod
+   ```
+
+   The backup includes Keycloak and memory PostgreSQL dumps, Vaultwarden data, and `env/prod.env`. If `BACKUP_RCLONE_REMOTE` is set, `BACKUP_AGE_RECIPIENT` is required and the encrypted archive is copied to Google Drive.

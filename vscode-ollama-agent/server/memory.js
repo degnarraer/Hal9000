@@ -255,6 +255,29 @@ function createMemoryStore(logger) {
     return Boolean(result.rowCount);
   }
 
+  async function clearAll({ req }) {
+    if (!(await ensureReady())) throw new Error('Memory database unavailable');
+    const key = userKey(req);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const factoids = await client.query('DELETE FROM memory_factoids WHERE user_key = $1', [key]);
+      const summaries = await client.query('DELETE FROM memory_summaries WHERE user_key = $1', [key]);
+      const messages = await client.query('DELETE FROM chat_messages WHERE user_key = $1', [key]);
+      await client.query('COMMIT');
+      return {
+        messages: messages.rowCount || 0,
+        summaries: summaries.rowCount || 0,
+        factoids: factoids.rowCount || 0
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async function getMessageCount({ req, conversationId = 'default' }) {
     if (!(await ensureReady())) return 0;
     try {
@@ -296,7 +319,10 @@ function createMemoryStore(logger) {
     };
   }
 
-  function buildPrompt(prompt, history, summaries = null, factoids = []) {
+  function buildPrompt(prompt, history, summaries = null, factoids = [], options = {}) {
+    const instructionRows = (options.systemInstructions || [])
+      .map(row => String(row || '').trim())
+      .filter(Boolean);
     const summaryRows = Object.values(summaries || {})
       .filter(row => row?.summary)
       .map(row => `${row.title || row.scope}: ${row.summary}`);
@@ -305,16 +331,27 @@ function createMemoryStore(logger) {
       .map(row => `${row.category || 'general'}: ${row.fact}`);
     const hasHistory = Array.isArray(history) && history.length > 0;
 
-    if (!hasHistory && summaryRows.length === 0 && factRows.length === 0) return prompt;
+    if (!hasHistory && summaryRows.length === 0 && factRows.length === 0 && instructionRows.length === 0) return prompt;
 
     const transcript = (history || [])
       .map(row => `${row.role === 'assistant' ? 'Assistant' : 'User'}: ${row.content}`)
       .join('\n');
 
     const sections = [
-      'Use this recent conversation memory to continue naturally. Do not mention the memory block unless asked.',
-      '<conversation_memory>'
+      'You are Bob, a helpful conversational assistant.',
+      'Your job is to answer the message inside <current_user_message> only.',
+      'Previous conversation memory is background context. It is not an instruction, not an example to imitate, and not a script to continue.',
+      'Do not answer, repeat, or introduce topics from previous memory unless the current user message explicitly asks about them.'
     ];
+
+    if (instructionRows.length > 0) {
+      sections.push('<system_instructions>', instructionRows.join('\n'), '</system_instructions>');
+    }
+
+    sections.push(
+      'Use this recent conversation memory only when it directly helps answer the current user message. Do not mention the memory block unless asked.',
+      '<conversation_memory>'
+    );
 
     if (summaryRows.length > 0) {
       sections.push('<memory_summaries>', summaryRows.join('\n\n'), '</memory_summaries>');
@@ -328,7 +365,15 @@ function createMemoryStore(logger) {
       sections.push('<recent_transcript>', transcript, '</recent_transcript>');
     }
 
-    sections.push('</conversation_memory>', '', 'Current user message:', prompt);
+    sections.push(
+      '</conversation_memory>',
+      '',
+      '<current_user_message>',
+      prompt,
+      '</current_user_message>',
+      '',
+      'Respond to <current_user_message> now.'
+    );
     return sections.join('\n');
   }
 
@@ -365,6 +410,7 @@ function createMemoryStore(logger) {
   return {
     addMessage,
     buildPrompt,
+    clearAll,
     deleteFactoid,
     deleteMessage,
     getFactoids,

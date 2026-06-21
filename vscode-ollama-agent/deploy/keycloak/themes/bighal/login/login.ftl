@@ -30,6 +30,10 @@
 
       <input type="hidden" id="id-hidden-input" name="credentialId" <#if auth.selectedCredential?has_content>value="${auth.selectedCredential}"</#if>>
       <button tabindex="4" class="bighal-primary" name="login" id="kc-login" type="submit">${msg("doLogIn")}</button>
+      <details class="bighal-privacy">
+        <summary>User privacy</summary>
+        <p>Big Hal requires sign-in, protects sessions with secure cookies, and limits admin tools to authorized users. Conversations, memory, voice, and activity data stay within this app environment unless you choose features that call configured external services.</p>
+      </details>
     </form>
   <#elseif section = "info">
     <#if realm.password && realm.registrationAllowed && !(registrationDisabled??)>

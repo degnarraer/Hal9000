@@ -40,8 +40,8 @@ test('parseDuckDuckGoResults extracts titles urls and snippets', () => {
 });
 
 test('buildWebSummaryPrompt includes source links for ollama summarization', () => {
-  const prompt = buildWebSummaryPrompt('search for Big Hal', 'Big Hal', [
-    { title: 'Big Hal', url: 'https://example.com', snippet: 'A personal assistant.' }
+  const prompt = buildWebSummaryPrompt('search for Bob', 'Bob', [
+    { title: 'Bob', url: 'https://example.com', snippet: 'A personal assistant.' }
   ]);
 
   assert.match(prompt, /Use only the sources below/);

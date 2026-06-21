@@ -1,0 +1,21 @@
+<section class="panel-view users-dashboard">
+  <div class="monitor-toolbar">
+    <h3>Users</h3>
+    <button id="refreshUsers" type="button">
+      <i data-lucide="refresh-cw"></i>
+      Refresh
+    </button>
+  </div>
+
+  <div id="usersSummary" class="monitor-summary"></div>
+
+  <section class="monitor-card">
+    <div class="users-card-header">
+      <h4>Known Users</h4>
+      <input id="usersFilter" type="search" autocomplete="off" placeholder="Filter users">
+    </div>
+    <div id="usersList" class="users-table"></div>
+  </section>
+
+  <div id="usersStatus" class="model-status"></div>
+</section>

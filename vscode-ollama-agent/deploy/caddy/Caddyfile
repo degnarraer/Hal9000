@@ -10,3 +10,8 @@
 
   reverse_proxy keycloak:8080
 }
+
+{$VAULT_SITE:http://vault.localhost} {
+  encode gzip zstd
+  reverse_proxy vaultwarden:80
+}

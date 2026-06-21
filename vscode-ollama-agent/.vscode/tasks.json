@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "start-server",
+      "label": "Local Dev / Start Server",
       "type": "shell",
       "command": "npm.cmd run start-server",
       "isBackground": true,
@@ -26,7 +26,7 @@
       }
     },
     {
-      "label": "stop-server",
+      "label": "Local Dev / Stop Server",
       "type": "shell",
       "command": "npm.cmd run stop-server",
       "problemMatcher": [],
@@ -36,7 +36,7 @@
       }
     },
     {
-      "label": "open-browser",
+      "label": "Local Dev / Open Browser",
       "type": "shell",
       "command": "Start-Process http://localhost:3000",
       "problemMatcher": [],
@@ -46,12 +46,78 @@
       }
     },
     {
-      "label": "deploy-prod-web",
+      "label": "Public Website / Deploy App and Caddy",
       "type": "shell",
       "command": "npm.cmd run docker:prod:deploy-web",
       "options": {
         "cwd": "${workspaceFolder}"
       },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Public Website / Redeploy Everything",
+      "type": "shell",
+      "command": "npm.cmd run public-site:redeploy",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Public Website / Fix DuckDNS URL Update",
+      "type": "shell",
+      "command": "npm.cmd run public-site:fix-duckdns",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Public Website / Flush DNS Cache",
+      "type": "shell",
+      "command": "npm.cmd run public-site:flush-dns",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Public Website / Check URL and Ports",
+      "type": "shell",
+      "command": "npm.cmd run public-site:check",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Public Website / Watch Logs",
+      "type": "shell",
+      "command": "npm.cmd run public-site:logs",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
       "problemMatcher": [],
       "presentation": {
         "reveal": "always",

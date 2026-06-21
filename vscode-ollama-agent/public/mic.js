@@ -10,6 +10,8 @@ let manuallyStoppingRecognition = false;
 let speechRecognitionFailed = false;
 let detectedAudioWhileSpeechFailed = false;
 let composerDraftBeforeMic = '';
+let startingMic = false;
+let micStartToken = 0;
 const MAX_TRANSCRIPT_DISPLAY = 180;
 
 const canvas = document.getElementById('waveform');
@@ -25,49 +27,78 @@ const micAudioConstraints = {
 
 async function startMic() {
   console.log('startMic called');
+  if (startingMic || micToggle?.dataset.running === '1') return;
+  startingMic = true;
+  const startToken = ++micStartToken;
+
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     await window.__dialog.alert({
       title: 'Microphone Unsupported',
       message: 'getUserMedia is not supported in this browser.'
     });
+    startingMic = false;
     return;
   }
 
-  mediaStream = await navigator.mediaDevices.getUserMedia({
-    audio: micAudioConstraints
-  });
-  logAppliedMicSettings(mediaStream);
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  sourceNode = audioCtx.createMediaStreamSource(mediaStream);
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 2048;
-  const bufferLength = analyser.fftSize; // use full fftSize for time-domain
-  dataArray = new Uint8Array(bufferLength);
-  sourceNode.connect(analyser);
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: micAudioConstraints
+    });
 
-  console.log('audio started, bufferLength=', bufferLength);
-  speechRecognitionFailed = false;
-  detectedAudioWhileSpeechFailed = false;
-  setMicTranscript('Listening...');
-  drawWaveform();
-  startSpeechRecognition();
+    if (startToken !== micStartToken) {
+      mediaStream.getTracks().forEach(t => t.stop());
+      return;
+    }
+
+    logAppliedMicSettings(mediaStream);
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+
+    sourceNode = audioCtx.createMediaStreamSource(mediaStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    const bufferLength = analyser.fftSize; // use full fftSize for time-domain
+    dataArray = new Uint8Array(bufferLength);
+    sourceNode.connect(analyser);
+
+    console.log('audio started, bufferLength=', bufferLength);
+    finalTranscriptBuffer = '';
+    speechRecognitionFailed = false;
+    detectedAudioWhileSpeechFailed = false;
+    setMicButtonState(true);
+    setMicTranscript('Listening...');
+    drawWaveform();
+    startSpeechRecognition();
+  } catch (e) {
+    stopMic();
+    throw e;
+  } finally {
+    startingMic = false;
+  }
 }
 
 function stopMic() {
   console.log('stopMic called');
+  micStartToken += 1;
+  startingMic = false;
   mediaStream && mediaStream.getTracks().forEach(t => t.stop());
   animationId && cancelAnimationFrame(animationId);
   animationId = null;
-  audioCtx && audioCtx.close();
+  audioCtx && audioCtx.close().catch(err => console.warn('AudioContext close failed', err));
+  mediaStream = null;
+  audioCtx = null;
+  sourceNode = null;
   analyser = null;
   dataArray = null;
+  finalTranscriptBuffer = '';
   speechRecognitionFailed = false;
   detectedAudioWhileSpeechFailed = false;
   stopSpeechRecognition();
   setMicTranscript('');
-  if (micToggle) {
-    micToggle.classList.remove('active');
-  }
+  setMicButtonState(false);
 }
 
 function renderIcons() {
@@ -98,7 +129,9 @@ function setComposerMicMode(isRunning) {
   composerInput.readOnly = isRunning;
   composerInput.classList.toggle('mic-live', isRunning);
   inputSection?.classList.toggle('mic-active', isRunning);
-  composerInput.placeholder = isRunning ? 'Listening...' : 'Ask Big Hal';
+  composerInput.placeholder = isRunning ? 'Listening...' : 'Ask Bob';
+  if (isRunning) window.__bob?.listen?.();
+  else window.__bob?.idle?.();
 
   if (isRunning) {
     composerInput.value = '';
@@ -124,6 +157,10 @@ function logAppliedMicSettings(stream) {
 
 function drawWaveform() {
   if (!analyser || !canvas) return;
+  if (audioCtx?.state === 'suspended') {
+    audioCtx.resume().catch(err => console.warn('AudioContext resume failed', err));
+  }
+
   analyser.getByteTimeDomainData(dataArray);
 
   const rect = canvas.getBoundingClientRect();
@@ -165,11 +202,15 @@ function drawWaveform() {
 function startSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
-    setMicTranscript('SpeechRecognition API not supported in this browser.');
+    speechRecognitionFailed = true;
+    setMicTranscript('Mic is active. Browser speech recognition is not supported here.');
     return;
   }
   clearTimeout(recognitionRestartTimer);
   manuallyStoppingRecognition = false;
+  if (recognition) {
+    try { recognition.abort(); } catch (e) { console.warn('Speech recognition abort failed', e); }
+  }
   recognition = new SpeechRecognition();
   recognition.continuous = true;
   recognition.interimResults = true;
@@ -199,7 +240,6 @@ function startSpeechRecognition() {
 
     if (e.error === 'network') {
       speechRecognitionFailed = true;
-      manuallyStoppingRecognition = true;
       setMicTranscript('Mic is active. Browser speech recognition cannot reach its service.');
       console.warn('Speech recognition service unavailable', e);
       return;
@@ -209,27 +249,45 @@ function startSpeechRecognition() {
     const message = e.message || e.error || 'Speech recognition failed';
     if (recoverable) {
       console.warn('Speech recognition warning', e);
-      setMicTranscript(`Voice input paused: ${message}`);
+      setMicTranscript('Listening...');
     } else {
       console.error('Speech recognition error', e);
       setMicTranscript(`Voice input error: ${message}`);
     }
   };
   recognition.onend = () => {
-    if (!manuallyStoppingRecognition && micToggle.dataset.running === '1') {
-      recognitionRestartTimer = setTimeout(() => {
-        try { recognition.start(); } catch (e) { console.warn('Speech recognition restart failed', e); }
-      }, 350);
-    }
+    queueSpeechRecognitionRestart();
   };
-  try { recognition.start(); } catch (e) { console.warn('Speech recognition start failed', e); }
+  try {
+    recognition.start();
+  } catch (e) {
+    console.warn('Speech recognition start failed', e);
+    queueSpeechRecognitionRestart();
+  }
 }
 
 function stopSpeechRecognition() {
   manuallyStoppingRecognition = true;
   clearTimeout(recognitionRestartTimer);
-  recognition && recognition.stop();
+  if (recognition) {
+    try { recognition.stop(); } catch (e) { console.warn('Speech recognition stop failed', e); }
+  }
   recognition = null;
+}
+
+function queueSpeechRecognitionRestart() {
+  clearTimeout(recognitionRestartTimer);
+  if (manuallyStoppingRecognition || micToggle?.dataset.running !== '1') return;
+
+  recognitionRestartTimer = setTimeout(() => {
+    if (manuallyStoppingRecognition || micToggle?.dataset.running !== '1') return;
+    try {
+      recognition?.start();
+    } catch (e) {
+      console.warn('Speech recognition restart failed', e);
+      queueSpeechRecognitionRestart();
+    }
+  }, 700);
 }
 
 function submitVoicePrompt(prompt) {
@@ -261,21 +319,20 @@ function setMicTranscript(text) {
   }
 }
 
-micToggle.addEventListener('click', async () => {
-  window.__chat?.unlockAudio?.();
-  if (micToggle.dataset.running === '1') {
-    setMicButtonState(false);
-    stopMic();
-  } else {
-    setMicButtonState(true);
-    try {
-      await startMic();
-    } catch (e) {
-      console.error(e);
-      setMicButtonState(false);
+if (micToggle) {
+  micToggle.addEventListener('click', async () => {
+    window.__chat?.unlockAudio?.();
+    if (micToggle.dataset.running === '1' || startingMic) {
+      stopMic();
+    } else {
+      try {
+        await startMic();
+      } catch (e) {
+        console.error(e);
+      }
     }
-  }
-});
+  });
+}
 
 // expose functions for debugging
 window.__mic = { startMic, stopMic };

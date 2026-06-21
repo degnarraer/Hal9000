@@ -1,0 +1,30 @@
+<section class="user-chat-view">
+  <div class="monitor-toolbar">
+    <h3>Encrypted User Chat</h3>
+    <span id="userChatStatus" class="stream-status">Starting</span>
+    <button id="userChatRefresh" type="button"><i data-lucide="refresh-cw"></i> Refresh</button>
+  </div>
+
+  <div class="user-chat-grid">
+    <section class="monitor-card user-chat-people">
+      <h4>Users</h4>
+      <label class="user-chat-search">
+        <i data-lucide="search"></i>
+        <input id="userChatSearch" type="search" autocomplete="off" placeholder="Search users">
+      </label>
+      <div id="userChatUsers" class="user-chat-users"></div>
+    </section>
+
+    <section class="monitor-card user-chat-thread">
+      <div class="user-chat-thread-header">
+        <h4 id="userChatPeerName">Select a user</h4>
+        <small id="userChatPeerMeta">Messages are encrypted in this browser before they reach the server.</small>
+      </div>
+      <div id="userChatMessages" class="user-chat-messages"></div>
+      <form id="userChatForm" class="user-chat-form">
+        <input id="userChatInput" type="text" autocomplete="off" placeholder="Encrypted message" disabled>
+        <button id="userChatSend" type="submit" disabled aria-label="Send"><i data-lucide="send"></i></button>
+      </form>
+    </section>
+  </div>
+</section>

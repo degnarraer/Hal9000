@@ -134,13 +134,146 @@ function createAdminStore(logger, securityEvents = null) {
 
   async function grantRole(user, role, grantedBy = 'system') {
     if (!(await ensureReady())) throw new Error('Role database unavailable');
+    const normalizedRole = normalizeRole(role);
+    if (!normalizedRole) throw new Error('Role is required');
     await pool.query(
       `INSERT INTO app_user_roles (user_key, email, role, granted_by)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (user_key, role) DO UPDATE
        SET email = EXCLUDED.email`,
-      [userKey(user), userEmail(user), role, grantedBy]
+      [userKey(user), userEmail(user), normalizedRole, grantedBy]
     );
+  }
+
+  async function revokeRole(user, role) {
+    if (!(await ensureReady())) throw new Error('Role database unavailable');
+    const normalizedRole = normalizeRole(role);
+    if (!normalizedRole || normalizedRole === USER_ROLE) throw new Error('Role cannot be removed');
+    await pool.query(
+      'DELETE FROM app_user_roles WHERE user_key = $1 AND role = $2',
+      [userKey(user), normalizedRole]
+    );
+  }
+
+  async function listUsers(req, res) {
+    try {
+      if (!(await ensureReady())) {
+        const current = req.user || {};
+        return res.json({
+          ok: true,
+          data: {
+            persistent: false,
+            users: [{
+              userKey: userKey(current),
+              name: current.name || current.preferred_username || current.email || 'Signed in user',
+              email: userEmail(current),
+              roles: req.roles || [USER_ROLE],
+              appRoles: [],
+              firstSeenAt: null,
+              lastSeenAt: null,
+              currentAction: 'Current session',
+              activeRequests: 0,
+              online: true
+            }]
+          }
+        });
+      }
+
+      const activityTable = await pool.query("SELECT to_regclass('public.activity_user_state') AS table_name");
+      const hasActivityTable = Boolean(activityTable.rows[0]?.table_name);
+      const query = hasActivityTable ? `
+          WITH role_users AS (
+            SELECT user_key, MAX(email) AS email, jsonb_agg(role ORDER BY role) AS app_roles
+            FROM app_user_roles
+            GROUP BY user_key
+          )
+          SELECT
+            COALESCE(activity_user_state.user_key, role_users.user_key) AS user_key,
+            COALESCE(NULLIF(activity_user_state.name, ''), NULLIF(activity_user_state.email, ''), NULLIF(role_users.email, ''), COALESCE(activity_user_state.user_key, role_users.user_key)) AS name,
+            COALESCE(NULLIF(activity_user_state.email, ''), NULLIF(role_users.email, '')) AS email,
+            COALESCE(activity_user_state.roles, '[]'::jsonb) AS claim_roles,
+            COALESCE(role_users.app_roles, '[]'::jsonb) AS app_roles,
+            activity_user_state.current_action,
+            activity_user_state.last_action,
+            activity_user_state.active_requests,
+            activity_user_state.first_seen_at,
+            activity_user_state.last_seen_at,
+            activity_user_state.last_seen_at > now() - interval '5 minutes' AS online
+          FROM activity_user_state
+          FULL OUTER JOIN role_users ON role_users.user_key = activity_user_state.user_key
+          ORDER BY online DESC NULLS LAST, activity_user_state.last_seen_at DESC NULLS LAST, email ASC NULLS LAST
+        ` : `
+          SELECT
+            user_key,
+            COALESCE(NULLIF(MAX(email), ''), user_key) AS name,
+            MAX(email) AS email,
+            '[]'::jsonb AS claim_roles,
+            jsonb_agg(role ORDER BY role) AS app_roles,
+            'Idle' AS current_action,
+            'Idle' AS last_action,
+            0 AS active_requests,
+            NULL::timestamptz AS first_seen_at,
+            NULL::timestamptz AS last_seen_at,
+            false AS online
+          FROM app_user_roles
+          GROUP BY user_key
+          ORDER BY email ASC NULLS LAST
+        `;
+      const result = await pool.query(query);
+
+      const users = result.rows.map(row => {
+        const claimRoles = Array.isArray(row.claim_roles) ? row.claim_roles : [];
+        const appRoles = Array.isArray(row.app_roles) ? row.app_roles : [];
+        const roles = Array.from(new Set([USER_ROLE, ...claimRoles, ...appRoles].map(normalizeRole).filter(Boolean))).sort();
+        return {
+          userKey: row.user_key,
+          name: row.name || row.email || row.user_key,
+          email: row.email || '',
+          roles,
+          appRoles,
+          firstSeenAt: row.first_seen_at,
+          lastSeenAt: row.last_seen_at,
+          currentAction: row.current_action || 'Idle',
+          lastAction: row.last_action || 'Idle',
+          activeRequests: Number(row.active_requests || 0),
+          online: Boolean(row.online)
+        };
+      });
+
+      res.json({ ok: true, data: { persistent: true, users } });
+    } catch (err) {
+      logger.error('Admin users list failed', err?.message || err);
+      res.status(500).json({ ok: false, error: 'Users unavailable' });
+    }
+  }
+
+  async function setUserAdmin(req, res) {
+    try {
+      const target = {
+        sub: req.params.userKey,
+        email: req.body?.email || '',
+        name: req.body?.name || req.params.userKey
+      };
+      const grantedBy = userEmail(req.user) || userKey(req.user);
+      await grantRole(target, ADMIN_ROLE, grantedBy);
+      res.json({ ok: true });
+    } catch (err) {
+      logger.error('Admin role grant failed', err?.message || err);
+      res.status(500).json({ ok: false, error: 'Could not grant admin role' });
+    }
+  }
+
+  async function removeUserAdmin(req, res) {
+    try {
+      if (req.params.userKey === userKey(req.user) && (await countAdmins()) <= 1) {
+        return res.status(400).json({ ok: false, error: 'Cannot remove the last admin role from yourself' });
+      }
+      await revokeRole({ sub: req.params.userKey }, ADMIN_ROLE);
+      res.json({ ok: true });
+    } catch (err) {
+      logger.error('Admin role revoke failed', err?.message || err);
+      res.status(500).json({ ok: false, error: 'Could not revoke admin role' });
+    }
   }
 
   async function bootstrapStatus(req, res) {
@@ -201,7 +334,10 @@ function createAdminStore(logger, securityEvents = null) {
     bootstrapSelf,
     bootstrapStatus,
     getRolesForUser,
+    listUsers,
     requireAdmin,
+    removeUserAdmin,
+    setUserAdmin,
     shutdown
   };
 }

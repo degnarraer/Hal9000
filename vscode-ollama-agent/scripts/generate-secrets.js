@@ -9,7 +9,8 @@ const values = {
   KEYCLOAK_ADMIN_PASSWORD: secret(24),
   KEYCLOAK_DB_PASSWORD: secret(24),
   MEMORY_DB_PASSWORD: secret(24),
-  ADMIN_BOOTSTRAP_TOKEN: secret(32)
+  ADMIN_BOOTSTRAP_TOKEN: secret(32),
+  VAULTWARDEN_ADMIN_TOKEN: secret(48)
 };
 
 for (const [key, value] of Object.entries(values)) {

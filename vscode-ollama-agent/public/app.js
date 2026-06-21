@@ -6,6 +6,7 @@ const modelSelect = document.getElementById('model');
 const refreshModels = document.getElementById('refreshModels');
 const defaultModel = 'llama2';
 const selectedModelKey = 'selectedModel';
+const visibleChatClearedAtKey = 'visibleChatClearedAt';
 let currentAudio;
 let playbackRate = Number(localStorage.getItem('playbackRate') || '1');
 let aiAudioCtx;
@@ -20,8 +21,9 @@ const aiWaveform = document.getElementById('aiWaveform');
 const playbackSpeed = document.getElementById('playbackSpeed');
 const playbackRateLabel = document.getElementById('playbackRateLabel');
 const playbackRates = [0.75, 1, 1.25, 1.5, 1.75, 2];
+const bobExpression = window.BobExpressionEngine ? new window.BobExpressionEngine('#bobFace') : null;
 
-function showDialog({ title = 'Big HAL', message = '', confirmText = 'OK', cancelText = '', danger = false } = {}) {
+function showDialog({ title = 'Bob', message = '', confirmText = 'OK', cancelText = '', danger = false } = {}) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'hal-dialog-overlay';
@@ -103,10 +105,13 @@ async function loadMemoryHistory() {
     const response = await fetch('/api/memory/history?limit=24', { cache: 'no-store' });
     const json = await response.json();
     if (!json.ok) throw new Error(json.error || 'Memory history unavailable');
+    const clearedAt = Date.parse(localStorage.getItem(visibleChatClearedAtKey) || '');
     messagesEl.innerHTML = '';
-    (json.data || []).forEach(row => {
-      addMessage(row.role === 'assistant' ? 'bot' : 'user', row.content);
-    });
+    (json.data || [])
+      .filter(row => !Number.isFinite(clearedAt) || Date.parse(row.created_at) > clearedAt)
+      .forEach(row => {
+        addMessage(row.role === 'assistant' ? 'bot' : 'user', row.content);
+      });
   } catch (err) {
     console.warn('Failed to load memory history', err);
   }
@@ -121,6 +126,7 @@ async function clearVisibleChat() {
     danger: true
   });
   if (!shouldClear) return;
+  localStorage.setItem(visibleChatClearedAtKey, new Date().toISOString());
   messagesEl.innerHTML = '';
 }
 
@@ -301,6 +307,7 @@ function startStreamingSpeech() {
   streamingSpeechActive = Boolean(window.speechSynthesis && window.SpeechSynthesisUtterance);
   streamingSpeechBuffer = '';
   if (streamingSpeechActive) window.speechSynthesis.cancel();
+  bobExpression?.think();
   return streamingSpeechActive;
 }
 
@@ -392,13 +399,16 @@ function drawAiWaveform() {
 
   const step = Math.max(1, Math.floor(aiDataArray.length / width));
   let x = 0;
+  let level = 0;
   for (let i = 0; i < aiDataArray.length; i += step) {
+    level += Math.abs(aiDataArray[i] - 128);
     const y = (aiDataArray[i] / 255) * height;
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
     x += 1;
   }
   ctx.stroke();
+  bobExpression?.setMouthLevel(Math.min(1, (level / Math.max(1, x)) / 30));
 
   aiAnimationId = requestAnimationFrame(drawAiWaveform);
 }
@@ -406,11 +416,13 @@ function drawAiWaveform() {
 function setAiVoiceActive(isActive) {
   const panel = document.querySelector('.ai-voice');
   if (panel) panel.classList.toggle('active', isActive);
+  if (isActive) bobExpression?.startSpeaking();
 
   if (!isActive && aiAnimationId) {
     cancelAnimationFrame(aiAnimationId);
     aiAnimationId = null;
   }
+  if (!isActive) bobExpression?.stopSpeaking();
 }
 
 function sendPrompt(prompt) {
@@ -423,6 +435,7 @@ function sendPrompt(prompt) {
 
   addMessage('user', prompt);
   input.value = '';
+  bobExpression?.think();
 
   const url = `/api/stream?model=${encodeURIComponent(model)}&prompt=${encodeURIComponent(prompt)}`;
 
@@ -443,12 +456,14 @@ function sendPrompt(prompt) {
   evt.addEventListener('done', () => {
     evt.close();
     if (!finishStreamingSpeech() && !canSpeakStream) speakText(partial);
+    if (canSpeakStream) bobExpression?.idle();
     window.dispatchEvent(new CustomEvent('hal:memory-changed'));
   });
   evt.addEventListener('error', (event) => {
     console.error('SSE error', event);
     streamingSpeechActive = false;
     streamingSpeechBuffer = '';
+    bobExpression?.setEmotion('concerned');
     if (event.data) {
       try {
         botEl.textContent = JSON.parse(event.data);
@@ -493,3 +508,4 @@ renderIcons();
 
 window.__icons = { render: renderIcons };
 window.__chat = { sendPrompt, speakText, unlockAudio, setPlaybackRate, loadModels: loadChatModels, loadMemoryHistory };
+window.__bob = bobExpression;

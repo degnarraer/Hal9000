@@ -3,7 +3,10 @@ const assert = require('node:assert/strict');
 
 const {
   getTtsProvider,
+  buildPiperEnv,
+  getSupportedTtsProviders,
   piperArgsForOutput,
+  resolveTtsProvider,
   splitTextForTts
 } = require('../server/tts');
 
@@ -11,6 +14,27 @@ test('getTtsProvider defaults to google and accepts piper', () => {
   assert.equal(getTtsProvider({}), 'google');
   assert.equal(getTtsProvider({ TTS_PROVIDER: 'piper' }), 'piper');
   assert.equal(getTtsProvider({ TTS_PROVIDER: 'unknown' }), 'google');
+});
+
+test('tts provider helpers expose and resolve supported engines', () => {
+  assert.deepEqual(getSupportedTtsProviders(), ['google', 'piper', 'windows']);
+  assert.equal(resolveTtsProvider('piper', 'google'), 'piper');
+  assert.equal(resolveTtsProvider('windows', 'google'), 'windows');
+  assert.equal(resolveTtsProvider('unknown', 'piper'), 'piper');
+});
+
+test('buildPiperEnv applies tester voice overrides', () => {
+  const env = buildPiperEnv({
+    speaker: '2',
+    lengthScale: '1.2',
+    noiseScale: '0.4',
+    noiseW: '0.7'
+  }, { TTS_PIPER_MODEL: 'voice.onnx' });
+
+  assert.equal(env.TTS_PIPER_SPEAKER, '2');
+  assert.equal(env.TTS_PIPER_LENGTH_SCALE, '1.2');
+  assert.equal(env.TTS_PIPER_NOISE_SCALE, '0.4');
+  assert.equal(env.TTS_PIPER_NOISE_W, '0.7');
 });
 
 test('splitTextForTts keeps short text intact', () => {

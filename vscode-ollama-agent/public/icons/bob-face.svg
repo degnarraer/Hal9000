@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="bobFaceTitle">
+  <title id="bobFaceTitle">Smiling Bob face</title>
+  <rect width="512" height="512" rx="96" fill="#020712"/>
+  <g id="bobHead">
+    <path id="bobHeadTop" d="M64 64h384l-32-32H96Z" fill="#1f3f82" opacity=".6"/>
+    <path id="bobHeadRight" d="M416 64l32-32v448l-32-32Z" fill="#1f3f82" opacity=".52"/>
+    <path id="bobHeadBottom" d="M64 448h384l-32 32H96Z" fill="#1f3f82" opacity=".48"/>
+    <path id="bobHeadLeft" d="M64 64L32 32v448l32-32Z" fill="#1f3f82" opacity=".22"/>
+    <rect id="bobHeadFront" x="64" y="64" width="384" height="384" rx="64" fill="#071229" stroke="#00e0ff" stroke-width="10"/>
+  </g>
+  <g id="bobForehead">
+    <path id="bobForeheadLine1" d="M168 108 Q256 100 344 108" stroke="#dfe9ff" stroke-width="7" stroke-linecap="round" fill="none" opacity=".1"/>
+    <path id="bobForeheadLine2" d="M196 128 Q256 123 316 128" stroke="#dfe9ff" stroke-width="5" stroke-linecap="round" fill="none" opacity=".05"/>
+  </g>
+  <g id="bobBrow">
+    <path id="bobLeftBrow" d="M126 158 Q176 136 226 148" stroke="#00e0ff" stroke-width="16" stroke-linecap="round" fill="none" opacity=".72"/>
+    <path id="bobRightBrow" d="M286 148 Q336 136 386 158" stroke="#7c5cff" stroke-width="16" stroke-linecap="round" fill="none" opacity=".72"/>
+  </g>
+  <g id="bobEyes">
+    <ellipse id="bobLeftEye" cx="186" cy="236" rx="34" ry="19" fill="#00e0ff"/>
+    <ellipse id="bobRightEye" cx="326" cy="236" rx="34" ry="19" fill="#7c5cff"/>
+    <path id="bobLeftEyeIcon" fill="#00e0ff" opacity="0"/>
+    <path id="bobRightEyeIcon" fill="#7c5cff" opacity="0"/>
+  </g>
+  <path id="bobMouth" d="M158 320 Q256 374 354 320" stroke="#dfe9ff" stroke-width="28" stroke-linecap="round" fill="none"/>
+</svg>

@@ -14,8 +14,10 @@ const { createMemoryStore } = require('./memory');
 const { createAdminStore } = require('./admin');
 const { createActivityMonitor } = require('./activity');
 const { createSecurityEventStore } = require('./securityEvents');
+const { createYahooStore } = require('./yahoo');
+const { createUserChatStore } = require('./userChat');
 const { shouldSearchWeb, extractSearchQuery, searchWeb, buildWebSummaryPrompt } = require('./webSearch');
-const { getTtsProvider, splitTextForTts, synthesizePiperSpeech } = require('./tts');
+const { getTtsProvider, getSupportedTtsProviders, resolveTtsProvider, buildPiperEnv, splitTextForTts, synthesizePiperSpeech } = require('./tts');
 
 const app = express();
 
@@ -39,6 +41,8 @@ const security = createSecurityMiddleware(logger, securityEvents);
 const memory = createMemoryStore(logger);
 const admin = createAdminStore(logger, securityEvents);
 const activity = createActivityMonitor(logger);
+const yahoo = createYahooStore(logger);
+const userChat = createUserChatStore(logger);
 
 function validateProductionConfig() {
   if (DEPLOYMENT_ENV !== 'production') return;
@@ -115,6 +119,30 @@ app.get('/api/auth/me', (req, res) => {
 // Asset version for cache-busting (set once when server starts)
 const ASSET_VERSION = Date.now();
 
+// Serve index.html dynamically and inject a cache-busting query param for included assets.
+// This must be registered before express.static, which would otherwise serve index.html directly.
+app.get('/', (req, res) => {
+  const indexPath = path.join(__dirname, '..', 'public', 'index.html');
+  fs.readFile(indexPath, 'utf8', (err, data) => {
+    if (err) {
+      logger.error('Failed to read index.html', err);
+      return res.status(500).send('Internal Server Error');
+    }
+    const v = ASSET_VERSION;
+    const replaced = data
+      .replace(/(\/app\.js)(["'])/g, `$1?v=${v}$2`)
+      .replace(/(\/style\.css)(["'])/g, `$1?v=${v}$2`)
+      .replace(/(\/bob-expression-engine\.js)(["'])/g, `$1?v=${v}$2`)
+      .replace(/(\/mic\.js)(["'])/g, `$1?v=${v}$2`)
+      .replace(/(\/menu\/[^"']+\.js)(["'])/g, `$1?v=${v}$2`)
+      .replace(/(\/menu\.js)(["'])/g, `$1?v=${v}$2`);
+
+    res.setHeader('Content-Type', 'text/html');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.send(replaced);
+  });
+});
+
 // Serve static assets with no-cache headers to ensure clients always check for updates
 app.use(express.static(path.join(__dirname, '..', 'public'), {
   setHeaders: (res, filePath) => {
@@ -134,7 +162,7 @@ function buildTtsOptions(lang) {
   };
 }
 
-function synthesizeLocalSpeech(text) {
+function synthesizeLocalSpeech(text, options = {}) {
   return new Promise((resolve, reject) => {
     if (process.platform !== 'win32') {
       reject(new Error('Local speech fallback is only implemented for Windows'));
@@ -147,6 +175,7 @@ function synthesizeLocalSpeech(text) {
       'Add-Type -AssemblyName System.Speech;',
       '$text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:TTS_TEXT_B64));',
       '$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer;',
+      'if ($env:TTS_WINDOWS_VOICE) { $speaker.SelectVoice($env:TTS_WINDOWS_VOICE); }',
       '$speaker.Rate = 0;',
       '$speaker.Volume = 100;',
       '$speaker.SetOutputToWaveFile($env:TTS_OUT);',
@@ -156,7 +185,7 @@ function synthesizeLocalSpeech(text) {
 
     const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
       windowsHide: true,
-      env: { ...process.env, TTS_TEXT_B64: textB64, TTS_OUT: outPath }
+      env: { ...process.env, TTS_TEXT_B64: textB64, TTS_OUT: outPath, TTS_WINDOWS_VOICE: options.voice || '' }
     });
 
     let stderr = '';
@@ -177,9 +206,48 @@ function synthesizeLocalSpeech(text) {
   });
 }
 
-async function synthesizeConfiguredSpeech(text, lang) {
-  if (TTS_PROVIDER === 'piper') {
-    return synthesizePiperSpeech(text);
+function listWindowsSpeechVoices() {
+  return new Promise(resolve => {
+    if (process.platform !== 'win32') {
+      resolve([]);
+      return;
+    }
+
+    const command = [
+      'Add-Type -AssemblyName System.Speech;',
+      '$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer;',
+      '$speaker.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name };',
+      '$speaker.Dispose();'
+    ].join(' ');
+
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      windowsHide: true
+    });
+
+    let stdout = '';
+    child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+    child.on('error', () => resolve([]));
+    child.on('close', code => {
+      if (code !== 0) {
+        resolve([]);
+        return;
+      }
+      resolve(stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean));
+    });
+  });
+}
+
+async function synthesizeConfiguredSpeech(text, lang, provider = TTS_PROVIDER, options = {}) {
+  if (provider === 'piper') {
+    return synthesizePiperSpeech(text, buildPiperEnv(options.piper));
+  }
+
+  if (provider === 'windows') {
+    return {
+      audio: await synthesizeLocalSpeech(text, options.windows),
+      contentType: 'audio/wav',
+      provider: 'windows'
+    };
   }
 
   return synthesizeGoogleSpeech(text, lang);
@@ -198,23 +266,49 @@ async function synthesizeGoogleSpeech(text, lang) {
 app.get('/api/tts', async (req, res) => {
   const text = req.query.text || '';
   const lang = req.query.lang || 'en';
+  const provider = resolveTtsProvider(req.query.provider, TTS_PROVIDER);
+  const speaker = req.query.speaker || '';
+  const voice = req.query.voice || '';
+  const lengthScale = req.query.lengthScale || '';
+  const noiseScale = req.query.noiseScale || '';
+  const noiseW = req.query.noiseW || '';
   if (!text) return res.status(400).json({ ok: false, error: 'text required' });
   try {
-    const chunks = splitTextForTts(text, TTS_PROVIDER === 'piper' ? 350 : 200);
-    const urls = chunks.map(chunk => `/api/tts/audio?lang=${encodeURIComponent(lang)}&text=${encodeURIComponent(chunk)}`);
+    const chunks = splitTextForTts(text, provider === 'piper' ? 350 : 200);
+    const optionParams = new URLSearchParams({
+      lang,
+      provider,
+      speaker,
+      voice,
+      lengthScale,
+      noiseScale,
+      noiseW
+    });
+    const urls = chunks.map(chunk => `/api/tts/audio?${optionParams.toString()}&text=${encodeURIComponent(chunk)}`);
 
-    res.json({ ok: true, provider: TTS_PROVIDER, urls, url: urls[0] });
+    res.json({ ok: true, provider, lang, urls, url: urls[0] });
   } catch (err) {
     logger.error('tts error', err);
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
 
-app.get('/api/tts/status', (req, res) => {
+app.get('/api/tts/status', async (req, res) => {
+  const windowsVoices = await listWindowsSpeechVoices();
   res.json({
     ok: true,
     data: {
       provider: TTS_PROVIDER,
+      providers: getSupportedTtsProviders(),
+      defaultLang: process.env.TTS_LANG || 'en',
+      defaults: {
+        piperSpeaker: process.env.TTS_PIPER_SPEAKER || process.env.PIPER_SPEAKER || '',
+        piperLengthScale: process.env.TTS_PIPER_LENGTH_SCALE || '',
+        piperNoiseScale: process.env.TTS_PIPER_NOISE_SCALE || '',
+        piperNoiseW: process.env.TTS_PIPER_NOISE_W || '',
+        windowsVoice: process.env.TTS_WINDOWS_VOICE || ''
+      },
+      windowsVoices,
       piperConfigured: Boolean(process.env.TTS_PIPER_MODEL || process.env.PIPER_MODEL)
     }
   });
@@ -223,16 +317,28 @@ app.get('/api/tts/status', (req, res) => {
 app.get('/api/tts/audio', async (req, res) => {
   const text = req.query.text || '';
   const lang = req.query.lang || 'en';
+  const provider = resolveTtsProvider(req.query.provider, TTS_PROVIDER);
+  const options = {
+    piper: {
+      speaker: req.query.speaker,
+      lengthScale: req.query.lengthScale,
+      noiseScale: req.query.noiseScale,
+      noiseW: req.query.noiseW
+    },
+    windows: {
+      voice: req.query.voice || process.env.TTS_WINDOWS_VOICE || ''
+    }
+  };
   if (!text) return res.status(400).json({ ok: false, error: 'text required' });
 
   try {
     let result;
 
     try {
-      result = await synthesizeConfiguredSpeech(text, lang);
+      result = await synthesizeConfiguredSpeech(text, lang, provider, options);
     } catch (err) {
-      logger.warn(`${TTS_PROVIDER} tts failed`, err?.message || err);
-      if (TTS_PROVIDER === 'piper') {
+      logger.warn(`${provider} tts failed`, err?.message || err);
+      if (provider === 'piper') {
         try {
           result = await synthesizeGoogleSpeech(text, lang);
         } catch (googleErr) {
@@ -243,7 +349,7 @@ app.get('/api/tts/audio', async (req, res) => {
       if (!result) {
         logger.warn('using local speech fallback');
         result = {
-          audio: await synthesizeLocalSpeech(text),
+          audio: await synthesizeLocalSpeech(text, options.windows),
           contentType: 'audio/wav',
           provider: 'windows'
         };
@@ -258,27 +364,6 @@ app.get('/api/tts/audio', async (req, res) => {
     logger.error('tts audio error', err);
     res.status(500).json({ ok: false, error: String(err) });
   }
-});
-
-// Serve index.html dynamically and inject a cache-busting query param for included assets
-app.get('/', (req, res) => {
-  const indexPath = path.join(__dirname, '..', 'public', 'index.html');
-  fs.readFile(indexPath, 'utf8', (err, data) => {
-    if (err) {
-      logger.error('Failed to read index.html', err);
-      return res.status(500).send('Internal Server Error');
-    }
-    // Append version query param to asset URLs so browser will reload when server restarts
-    const v = ASSET_VERSION;
-    const replaced = data
-      .replace(/(\/app\.js)(["'])/g, `$1?v=${v}$2`)
-      .replace(/(\/style\.css)(["'])/g, `$1?v=${v}$2`)
-      .replace(/(\/mic\.js)(["'])/g, `$1?v=${v}$2`)
-      .replace(/(\/menu\.js)(["'])/g, `$1?v=${v}$2`);
-
-    res.setHeader('Content-Type', 'text/html');
-    res.send(replaced);
-  });
 });
 
 // Load AI rules
@@ -313,12 +398,12 @@ function applyAiRules(req, res, next) {
     } catch (e) { logger.warn('Invalid rule pattern', pat, e.message); }
   }
 
-  // inject system-level prefix
   const prep = (AI_RULES.transformations && AI_RULES.transformations.prepend) || [];
-  const transformedPrompt = prep.join('\n') + '\n' + prompt + '\n' + (AI_RULES.transformations && AI_RULES.transformations.append || []).join('\n');
-  req.ai = { originalPrompt: prompt, transformedPrompt };
-  if (req.body) req.body.prompt = transformedPrompt;
-  if (req.query) req.query.prompt = transformedPrompt;
+  const append = (AI_RULES.transformations && AI_RULES.transformations.append) || [];
+  req.ai = {
+    originalPrompt: prompt,
+    systemInstructions: [...prep, ...append]
+  };
   next();
 }
 
@@ -356,16 +441,17 @@ function sendSseError(res, err) {
 
 function buildMemorySummaryPrompt(scope, transcript) {
   const instructions = {
-    short: 'Create a concise short-term memory summary of the latest conversation. Capture immediate goals, current task state, preferences stated today, and unresolved next steps. Keep it under 120 words.',
-    medium: 'Create a medium-term memory summary across the recent conversation history. Capture recurring preferences, active projects, decisions, constraints, and useful context. Keep it under 250 words.',
-    long: 'Create a long-term memory summary suitable for durable personalization. Capture stable user preferences, enduring projects, identity/context facts the user intentionally revealed, and durable operating principles. Avoid transient details. Keep it under 400 words.'
+    short: 'Create a concise short-term memory summary of the latest conversation. Capture immediate goals, current task state, preferences stated today, and unresolved next steps. Ignore greetings, small talk, and assistant mistakes unless they created an unresolved user-facing issue. Keep it under 120 words.',
+    medium: 'Create a medium-term memory summary across the recent conversation history. Capture recurring preferences, active projects, decisions, constraints, and useful context. Ignore greetings, small talk, and assistant mistakes unless they reveal a durable user preference or active problem. Keep it under 250 words.',
+    long: 'Create a long-term memory summary suitable for durable personalization. Capture stable user preferences, enduring projects, identity/context facts the user intentionally revealed, and durable operating principles. Avoid transient details, greetings, and assistant mistakes. Keep it under 400 words.'
   };
 
   return [
-    'You are HAL memory summarization skill.',
+    'You are Bob memory summarization skill.',
     instructions[scope] || instructions.short,
     'Only summarize information supported by the transcript. Do not invent facts.',
-    'Write in third person about the user and HAL. Do not include markdown tables.',
+    'Write in third person about the user and Bob.',
+    'Return only the summary text. Do not quote or reproduce the transcript. Do not write a preamble like "Based on the transcript". Do not include markdown tables.',
     '',
     '<conversation_transcript>',
     transcript || '(No conversation messages yet.)',
@@ -375,10 +461,10 @@ function buildMemorySummaryPrompt(scope, transcript) {
 
 function buildFactoidExtractionPrompt(transcript) {
   return [
-    'You are HAL memory factoid extraction skill.',
+    'You are Bob memory factoid extraction skill.',
     'Extract durable facts about the user that would help future conversations.',
     'Only include facts explicitly supported by the transcript. Do not infer sensitive attributes, secrets, medical facts, financial account data, or credentials.',
-    'Prefer stable preferences, ongoing projects, names the user asked HAL to remember, working style, environment details, and durable constraints.',
+    'Prefer stable preferences, ongoing projects, names the user asked Bob to remember, working style, environment details, and durable constraints.',
     'Return only JSON with this shape: {"factoids":[{"factKey":"short-stable-key","category":"preference|project|identity|environment|workflow|constraint|general","fact":"The user ...","confidence":0.0}]}',
     'If there are no durable user facts, return {"factoids":[]}.',
     '',
@@ -428,7 +514,7 @@ const memoryFactoidJobs = new Set();
 
 function transcriptFromMessages(messages) {
   return messages
-    .map(row => `${row.role === 'assistant' ? 'HAL' : row.role === 'system' ? 'System' : 'User'}: ${row.content}`)
+    .map(row => `${row.role === 'assistant' ? 'Bob' : row.role === 'system' ? 'System' : 'User'}: ${row.content}`)
     .join('\n\n');
 }
 
@@ -546,6 +632,19 @@ app.delete('/api/memory/factoids/:id', async (req, res) => {
     res.status(500).json({ ok: false, error: 'Could not delete factoid' });
   }
 });
+app.delete('/api/memory', async (req, res) => {
+  if (req.body?.confirm !== 'WIPE') {
+    return res.status(400).json({ ok: false, error: 'Type WIPE to confirm memory deletion' });
+  }
+
+  try {
+    const deleted = await memory.clearAll({ req });
+    res.json({ ok: true, data: deleted });
+  } catch (err) {
+    logger.error('memory wipe failed', getErrorText(err));
+    res.status(500).json({ ok: false, error: 'Could not wipe memory' });
+  }
+});
 app.post('/api/memory/summarize', async (req, res) => {
   const scope = req.body?.scope || 'short';
   const scopeConfig = memory.summaryScopes[scope];
@@ -563,8 +662,20 @@ app.post('/api/memory/summarize', async (req, res) => {
 });
 app.get('/api/admin/bootstrap/status', admin.bootstrapStatus);
 app.post('/api/admin/bootstrap', admin.bootstrapSelf);
+app.get('/api/admin/users', admin.requireAdmin, admin.listUsers);
+app.post('/api/admin/users/:userKey/roles/admin', admin.requireAdmin, admin.setUserAdmin);
+app.delete('/api/admin/users/:userKey/roles/admin', admin.requireAdmin, admin.removeUserAdmin);
 app.get('/api/activity/dashboard', admin.requireAdmin, activity.dashboard);
 app.get('/api/security/dashboard', admin.requireAdmin, securityEvents.dashboard);
+app.get('/api/yahoo/oauth/start', yahoo.startHandler);
+app.get('/api/yahoo/oauth/callback', yahoo.callbackHandler);
+app.get('/api/yahoo/account', yahoo.statusHandler);
+app.post('/api/yahoo/oauth/refresh', yahoo.refreshHandler);
+app.post('/api/yahoo/oauth/disconnect', yahoo.disconnectHandler);
+app.post('/api/user-chat/key', userChat.upsertKey);
+app.get('/api/user-chat/users', userChat.listUsers);
+app.get('/api/user-chat/messages', userChat.listMessages);
+app.post('/api/user-chat/messages', userChat.sendMessage);
 
 // Non-streaming API proxy (awaits full response)
 app.post('/api/chat', applyAiRules, async (req, res) => {
@@ -601,7 +712,9 @@ app.post('/api/chat', applyAiRules, async (req, res) => {
       memory.getSummaries({ req }),
       memory.getFactoids({ req, limit: 50 })
     ]);
-    const promptWithMemory = memory.buildPrompt(prompt || '', history, summaries, factoids);
+    const promptWithMemory = memory.buildPrompt(originalPrompt, history, summaries, factoids, {
+      systemInstructions: req.ai?.systemInstructions || []
+    });
     const payload = Object.assign({ model: chatModel, prompt: promptWithMemory }, parameters || {});
 
     const resp = await axios.post(`${OLLAMA_URL}/api/generate`, payload, {
@@ -663,7 +776,12 @@ app.get('/api/stream', applyAiRules, async (req, res) => {
       memory.getSummaries({ req }),
       memory.getFactoids({ req, limit: 50 })
     ]);
-    const payload = { model, prompt: memory.buildPrompt(prompt, history, summaries, factoids) };
+    const payload = {
+      model,
+      prompt: memory.buildPrompt(originalPrompt, history, summaries, factoids, {
+        systemInstructions: req.ai?.systemInstructions || []
+      })
+    };
     await memory.addMessage({ req, role: 'user', model, content: originalPrompt });
     const resp = await axios.post(`${OLLAMA_URL}/api/generate`, payload, {
       responseType: 'stream',
@@ -983,6 +1101,8 @@ function shutdownServer(exitCode = 0) {
         await admin.shutdown();
         await activity.shutdown();
         await securityEvents.shutdown();
+        await yahoo.shutdown();
+        await userChat.shutdown();
         logger.info('Server closed, exiting process');
         process.exit(exitCode);
       });

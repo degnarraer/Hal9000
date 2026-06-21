@@ -158,6 +158,42 @@ body.bighal-auth {
   box-shadow: 0 14px 30px rgba(0, 224, 255, 0.18);
 }
 
+.bighal-privacy {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #cdd8ec;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bighal-privacy summary {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  color: #dfe9ff;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.bighal-privacy summary::-webkit-details-marker {
+  display: none;
+}
+
+.bighal-privacy[open] {
+  border-color: rgba(0, 224, 255, 0.24);
+  background: rgba(0, 224, 255, 0.045);
+}
+
+.bighal-privacy p {
+  margin: 0;
+  padding: 0 12px 12px;
+  color: #cdd8ec;
+}
+
 .bighal-register {
   margin-top: auto;
   text-align: center;

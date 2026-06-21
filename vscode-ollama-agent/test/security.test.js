@@ -5,6 +5,8 @@ const { isHtmlPartialRequest, isPublicBrowserAsset, routeMatches } = require('..
 test('login assets required before authentication are public', () => {
   assert.equal(isPublicBrowserAsset({ method: 'GET', path: '/style.css' }), true);
   assert.equal(isPublicBrowserAsset({ method: 'GET', path: '/big_hal.png' }), true);
+  assert.equal(isPublicBrowserAsset({ method: 'GET', path: '/icons/bob-face.svg' }), true);
+  assert.equal(isPublicBrowserAsset({ method: 'GET', path: '/bob-expression-engine.js' }), true);
   assert.equal(isPublicBrowserAsset({ method: 'GET', path: '/vendor/lucide/lucide.min.js' }), true);
 });
 

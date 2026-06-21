@@ -35,19 +35,52 @@ panel.innerHTML = `
   </div>
   <div id="menuContent" class="panel-body"></div>
 `;
-document.body.appendChild(panel);
 
 menuBtn.style.cssText = (menuBtn.style.cssText || '') + 'z-index:10000;';
-panel.style.cssText = (panel.style.cssText || '') + 'position:fixed;right:0;top:0;bottom:var(--lower-banner-reserve);width:min(360px, calc(100vw - 16px));z-index:900;transform:translateX(100%);transition:transform 240ms ease;pointer-events:none;';
+panel.style.cssText = (panel.style.cssText || '') + 'position:fixed;right:0;top:0;bottom:var(--lower-banner-reserve);width:min(360px, calc(100vw - 16px));z-index:20000;transform:translateX(100%);transition:transform 240ms ease;pointer-events:none;';
+document.body.appendChild(panel);
+
+function applyPanelOpenState(isOpen) {
+  panel.hidden = false;
+  panel.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+  panel.style.display = 'flex';
+  panel.style.visibility = 'visible';
+  panel.style.opacity = '1';
+  panel.style.transform = isOpen ? 'translateX(0)' : 'translateX(100%)';
+  panel.style.pointerEvents = isOpen ? 'auto' : 'none';
+  panel.classList.toggle('open', isOpen);
+
+  const currentMenuBtn = document.getElementById('fabMenu');
+  currentMenuBtn?.classList.toggle('open', isOpen);
+  currentMenuBtn?.setAttribute('aria-expanded', String(isOpen));
+}
+
+function togglePanelChrome(event) {
+  event?.preventDefault();
+  event?.stopPropagation();
+  if (event) event.__menuToggleHandled = true;
+  const shouldOpen = !panel.classList.contains('open');
+  applyPanelOpenState(shouldOpen);
+  if (shouldOpen) window.__hydrateMenuPanel?.();
+  else window.__dehydrateMenuPanel?.();
+}
+
+menuBtn.addEventListener('click', togglePanelChrome);
+document.addEventListener('click', event => {
+  if (event.__menuToggleHandled) return;
+  if (!event.target.closest?.('#fabMenu')) return;
+  togglePanelChrome(event);
+}, true);
+panel.querySelector('#closePanel')?.addEventListener('click', event => {
+  event.preventDefault();
+  applyPanelOpenState(false);
+});
 
 const main = document.querySelector('.main');
-if (main) {
-  main.appendChild(panel);
-}
 const mainContent = document.getElementById('mainContent');
 const chatContainer = document.querySelector('.chat-container');
 const lowerBanner = document.getElementById('lowerBanner');
-const inputSection = document.querySelector('.input-section');
+const menuInputSection = document.querySelector('.input-section');
 const lowerBannerActions = document.getElementById('lowerBannerActions');
 const clearChatBtn = document.getElementById('clearChat');
 const pageBannerStatus = document.getElementById('pageBannerStatus');
@@ -105,10 +138,14 @@ const routes = {
   skills: { title: 'Skills Menu', url: '/menu-pages/skills.html', init: initSkills },
   memory: { title: 'Memory', url: '/menu-pages/memory.html', init: initMemory },
   webSearch: { title: 'Web Search Summary', url: '/menu-pages/web-search.html', init: initWebSearchSkill },
+  yahoo: { title: 'Yahoo', url: '/menu-pages/yahoo.html', init: initYahooSkill },
+  userChat: { title: 'User Chat', url: '/menu-pages/user-chat.html', init: initUserChat },
   admin: { title: 'Admin Menu', url: '/menu-pages/admin.html', init: initAdminMenu, admin: true },
+  users: { title: 'Users', url: '/menu-pages/users.html', init: initUsers, admin: true },
   models: { title: 'Models', url: '/menu-pages/models.html', init: initModels, admin: true },
   monitor: { title: 'Monitor', url: '/menu-pages/monitor.html', init: initMonitor, admin: true },
   logging: { title: 'Logging', url: '/menu-pages/logging.html', init: initLogging, admin: true },
+  appTester: { title: 'App Tester', url: '/menu-pages/app-tester.html', init: initAppTester, admin: true },
   activity: { title: 'Activity', url: '/menu-pages/activity.html', init: initActivity, admin: true },
   security: { title: 'Security', url: '/menu-pages/security.html', init: initSecurity, admin: true },
   remote: { title: 'Remote Control', url: '/menu-pages/remote.html', init: initRemote, admin: true },
@@ -119,16 +156,19 @@ const menuSubmenus = {
   skills: {
     title: 'Skills Menu',
     items: [
-      { route: 'memory', icon: 'brain', title: 'Memory', description: "Review chat memory and HAL's summaries." },
-      { route: 'webSearch', icon: 'search', title: 'Web Search Summary', description: 'Search current web results and summarize them with sources.' }
+      { route: 'memory', icon: 'brain', title: 'Memory', description: "Review chat memory and Bob's summaries." },
+      { route: 'webSearch', icon: 'search', title: 'Web Search Summary', description: 'Search current web results and summarize them with sources.' },
+      { route: 'yahoo', icon: 'mail', title: 'Yahoo', description: 'Link Yahoo with OAuth and manage Bob access.' }
     ]
   },
   admin: {
     title: 'Admin Menu',
     admin: true,
     items: [
+      { route: 'users', icon: 'users', title: 'Users', description: 'Review seen users and manage admin access.' },
       { route: 'models', icon: 'boxes', title: 'Models', description: 'Install, remove, and download Ollama models.' },
       { route: 'monitor', icon: 'activity', title: 'Monitor', description: 'Check the current Ollama server state.' },
+      { route: 'appTester', icon: 'flask-conical', title: 'App Tester', description: 'Run admin-only test endpoints and UI probes.' },
       { route: 'logging', icon: 'logs', title: 'Logging', description: 'Watch recent server activity.' },
       { route: 'activity', icon: 'chart-line', title: 'Activity', description: 'Track users, actions, and connection rates.' },
       { route: 'security', icon: 'shield-alert', title: 'Security', description: 'Review auth failures and admin access denials.' },
@@ -172,7 +212,7 @@ function renderMenuIcons() {
 
 function setLowerBannerRoute(routeName) {
   const isChat = routeName === 'chat';
-  if (inputSection) inputSection.hidden = !isChat;
+  if (menuInputSection) menuInputSection.hidden = !isChat;
   if (clearChatBtn) clearChatBtn.hidden = !isChat;
   if (pageBannerStatus) pageBannerStatus.hidden = isChat;
 
@@ -185,22 +225,11 @@ function setLowerBannerRoute(routeName) {
 }
 
 function setPanelOpen(isOpen) {
+  applyPanelOpenState(isOpen);
   if (isOpen) {
-    panel.style.transform = 'translateX(0)';
-    panel.style.pointerEvents = 'auto';
-    panel.classList.add('open');
-    menuBtn.classList.add('open');
-    menuBtn.setAttribute('aria-expanded', 'true');
-    main?.classList.add('panel-open');
-    fetchAccount();
-    loadMenuLanding();
+    window.__hydrateMenuPanel?.();
   } else {
-    panel.style.transform = 'translateX(100%)';
-    panel.style.pointerEvents = 'none';
-    panel.classList.remove('open');
-    menuBtn.classList.remove('open');
-    menuBtn.setAttribute('aria-expanded', 'false');
-    main?.classList.remove('panel-open');
+    window.__dehydrateMenuPanel?.();
   }
 }
 
@@ -355,6 +384,7 @@ async function loadMainPage(routeName, options = {}) {
   if (currentRoute === 'activity' && routeName !== 'activity') stopActivityAutoRefresh();
   if (currentRoute === 'security' && routeName !== 'security') stopSecurityAutoRefresh();
   if (currentRoute === 'logging' && routeName !== 'logging') stopLogStream();
+  if (currentRoute === 'userChat' && routeName !== 'userChat') stopUserChat();
 
   if (routeName === 'chat') {
     currentRoute = 'chat';
@@ -488,13 +518,369 @@ function capitalize(value) {
   return String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1);
 }
 
-menuBtn.addEventListener('click', () => {
-  setPanelOpen(!panel.classList.contains('open'));
+const USER_CHAT_KEYPAIR_STORAGE = 'halUserChatEcdhKeyPair.v1';
+const USER_CHAT_ENTROPY_TARGET = 80;
+let userChatState = null;
+
+async function initUserChat() {
+  const usersEl = byId('userChatUsers');
+  const messagesEl = byId('userChatMessages');
+  const statusEl = byId('userChatStatus');
+  const form = byId('userChatForm');
+  const input = byId('userChatInput');
+  const send = byId('userChatSend');
+  const refresh = byId('userChatRefresh');
+  const search = byId('userChatSearch');
+
+  if (!window.crypto?.subtle) {
+    statusEl.textContent = 'Crypto unavailable';
+    messagesEl.innerHTML = '<div class="menu-error">This browser does not support WebCrypto ECDH encryption.</div>';
+    return;
+  }
+
+  try {
+    userChatState = {
+      keyPair: await loadOrCreateUserChatKeyPair(),
+      users: [],
+      selected: null,
+      timer: null
+    };
+
+    await publishUserChatPublicKey(userChatState.keyPair.publicKey);
+    await refreshUserChatUsers();
+    refresh?.addEventListener('click', refreshUserChatUsers);
+    form?.addEventListener('submit', async event => {
+      event.preventDefault();
+      await sendUserChatMessage();
+    });
+  } catch (err) {
+    statusEl.textContent = 'Unavailable';
+    messagesEl.innerHTML = `<div class="menu-error">${escapeHtml(err.message)}</div>`;
+    usersEl.innerHTML = '';
+  }
+
+  async function refreshUserChatUsers() {
+    statusEl.textContent = 'Syncing';
+    try {
+      const query = String(search?.value || '').trim();
+      const response = await fetchWithAuthRedirect(`/api/user-chat/users${query ? `?q=${encodeURIComponent(query)}` : ''}`, { cache: 'no-store' });
+      const json = await response.json();
+      if (!json.ok) throw new Error(json.error || 'Unable to load users');
+      userChatState.users = json.data || [];
+      renderUserChatUsers();
+      statusEl.textContent = 'Encrypted';
+    } catch (err) {
+      statusEl.textContent = 'Offline';
+      usersEl.innerHTML = `<div class="menu-error">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderUserChatUsers() {
+    const users = userChatState.users;
+
+    usersEl.innerHTML = users.map(user => `
+      <button class="user-chat-user${userChatState.selected?.userKey === user.userKey ? ' active' : ''}" type="button" data-user-key="${escapeHtml(user.userKey)}" ${user.isSelf || !user.canChat ? 'disabled' : ''}>
+        <i data-lucide="${user.isSelf ? 'user-round-check' : user.canChat ? 'user' : 'user-x'}"></i>
+        <span>
+          <strong>${escapeHtml(user.name)}</strong>
+          <small>${escapeHtml(user.isSelf ? `You - ${user.fingerprint || 'key ready'}` : user.canChat ? (user.fingerprint || user.email || user.userKey) : 'User found - waiting for chat key')}</small>
+        </span>
+      </button>
+    `).join('') || `<div class="menu-loading">${search?.value ? 'No matching users.' : 'No users found yet.'}</div>`;
+
+    usersEl.querySelectorAll('[data-user-key]').forEach(button => {
+      button.addEventListener('click', () => selectUserChatPeer(button.dataset.userKey));
+    });
+    window.__icons?.render?.(mainPage);
+  }
+
+  let searchTimer;
+  function scheduleUserChatSearch() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(refreshUserChatUsers, 180);
+  }
+
+  async function selectUserChatPeer(userKey) {
+    userChatState.selected = userChatState.users.find(user => user.userKey === userKey) || null;
+    byId('userChatPeerName').textContent = userChatState.selected?.name || 'Select a user';
+    byId('userChatPeerMeta').textContent = userChatState.selected?.fingerprint
+      ? `Verify fingerprint: ${userChatState.selected.fingerprint}`
+      : userChatState.selected?.email || userChatState.selected?.userKey || 'Messages are encrypted in this browser before they reach the server.';
+    input.disabled = !userChatState.selected;
+    send.disabled = !userChatState.selected;
+    usersEl.querySelectorAll('.user-chat-user').forEach(button => {
+      button.classList.toggle('active', button.dataset.userKey === userKey);
+    });
+    await loadUserChatThread();
+    clearInterval(userChatState.timer);
+    userChatState.timer = setInterval(loadUserChatThread, 8000);
+  }
+
+  async function loadUserChatThread() {
+    if (!userChatState?.selected) return;
+    const response = await fetchWithAuthRedirect(`/api/user-chat/messages?with=${encodeURIComponent(userChatState.selected.userKey)}&limit=100`, { cache: 'no-store' });
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Unable to load messages');
+    const rows = await Promise.all((json.data || []).map(decryptUserChatRow));
+    messagesEl.innerHTML = rows.map(row => `
+      <div class="user-chat-message ${row.direction}">
+        <p>${escapeHtml(row.text)}</p>
+        <small>${escapeHtml(new Date(row.createdAt).toLocaleString())}</small>
+      </div>
+    `).join('') || '<div class="menu-loading">No messages with this user yet.</div>';
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  async function sendUserChatMessage() {
+    const text = input.value.trim();
+    if (!text || !userChatState?.selected) return;
+    input.value = '';
+    send.disabled = true;
+    try {
+      const encrypted = await encryptUserChatText(text, userChatState.selected.publicKeyJwk);
+      const response = await fetchWithAuthRedirect('/api/user-chat/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientKey: userChatState.selected.userKey,
+          ...encrypted
+        })
+      });
+      const json = await response.json();
+      if (!json.ok) throw new Error(json.error || 'Unable to send message');
+      await loadUserChatThread();
+    } catch (err) {
+      await window.__dialog.alert({ title: 'Encrypted Chat Failed', message: err.message });
+    } finally {
+      send.disabled = false;
+      input.focus();
+    }
+  }
+
+  search?.addEventListener('input', scheduleUserChatSearch);
+}
+
+function stopUserChat() {
+  if (userChatState?.timer) clearInterval(userChatState.timer);
+  userChatState = null;
+}
+
+async function loadOrCreateUserChatKeyPair() {
+  const stored = JSON.parse(localStorage.getItem(USER_CHAT_KEYPAIR_STORAGE) || 'null');
+  if (stored?.privateKeyJwk && stored?.publicKeyJwk) {
+    return {
+      privateKey: await crypto.subtle.importKey('jwk', stored.privateKeyJwk, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']),
+      publicKey: await crypto.subtle.importKey('jwk', stored.publicKeyJwk, { name: 'ECDH', namedCurve: 'P-256' }, true, [])
+    };
+  }
+
+  const entropy = await collectUserChatEntropy();
+  const keyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
+  const publicKeyJwk = await exportUserChatPublicKey(keyPair.publicKey);
+  const fingerprint = await userChatFingerprint(publicKeyJwk);
+  localStorage.setItem(USER_CHAT_KEYPAIR_STORAGE, JSON.stringify({
+    privateKeyJwk: await crypto.subtle.exportKey('jwk', keyPair.privateKey),
+    publicKeyJwk,
+    entropyDigest: entropy.digest,
+    fingerprint,
+    createdAt: new Date().toISOString()
+  }));
+  return keyPair;
+}
+
+async function exportUserChatPublicKey(publicKey) {
+  return crypto.subtle.exportKey('jwk', publicKey);
+}
+
+async function publishUserChatPublicKey(publicKey) {
+  const stored = JSON.parse(localStorage.getItem(USER_CHAT_KEYPAIR_STORAGE) || '{}');
+  const response = await fetchWithAuthRedirect('/api/user-chat/key', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      publicKeyJwk: await exportUserChatPublicKey(publicKey),
+      fingerprint: stored.fingerprint || ''
+    })
+  });
+  const json = await response.json();
+  if (!json.ok) throw new Error(json.error || 'Unable to publish chat key');
+}
+
+function collectUserChatEntropy() {
+  return new Promise(resolve => {
+    const samples = [];
+    const randomBytes = crypto.getRandomValues(new Uint8Array(32));
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    const overlay = document.createElement('div');
+    overlay.className = 'entropy-overlay';
+    overlay.innerHTML = `
+      <div class="entropy-dialog" role="dialog" aria-modal="true" aria-labelledby="entropyTitle">
+        <div class="entropy-header">
+          <span><i data-lucide="shield-check"></i></span>
+          <h2 id="entropyTitle">Create Chat Key</h2>
+        </div>
+        <p>Move around the field, click, or type until the meter fills. This adds a human randomness ceremony before your browser creates the end-to-end chat key.</p>
+        <div id="entropyPad" class="entropy-pad" tabindex="0">
+          <div id="entropyTrace" class="entropy-trace"></div>
+        </div>
+        <div class="entropy-meter"><span id="entropyMeter"></span></div>
+        <button id="entropyContinue" type="button" disabled><i data-lucide="key-round"></i> Create encrypted chat key</button>
+      </div>
+    `;
+
+    const pad = overlay.querySelector('#entropyPad');
+    const trace = overlay.querySelector('#entropyTrace');
+    const meter = overlay.querySelector('#entropyMeter');
+    const button = overlay.querySelector('#entropyContinue');
+
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+
+    function addSample(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = pad.getBoundingClientRect();
+      const point = {
+        type: event.type,
+        x: Math.round((event.clientX || 0) - rect.left),
+        y: Math.round((event.clientY || 0) - rect.top),
+        t: Math.round(performance.now() * 1000),
+        k: event.key || '',
+        r: Array.from(crypto.getRandomValues(new Uint8Array(4))).join(',')
+      };
+      samples.push(point);
+      const percent = Math.min(100, Math.round((samples.length / USER_CHAT_ENTROPY_TARGET) * 100));
+      meter.style.width = `${percent}%`;
+      trace.style.transform = `translate(${Math.max(0, Math.min(rect.width - 18, point.x))}px, ${Math.max(0, Math.min(rect.height - 18, point.y))}px)`;
+      if (samples.length >= USER_CHAT_ENTROPY_TARGET) button.disabled = false;
+    }
+
+    async function finish() {
+      const material = JSON.stringify({
+        samples,
+        random: Array.from(randomBytes),
+        userAgent: navigator.userAgent,
+        createdAt: new Date().toISOString()
+      });
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material));
+      overlay.remove();
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      resolve({ digest: arrayBufferToBase64(digest) });
+    }
+
+    function trapTouch(event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    overlay.addEventListener('touchstart', trapTouch, { passive: false });
+    overlay.addEventListener('touchmove', trapTouch, { passive: false });
+    overlay.addEventListener('wheel', trapTouch, { passive: false });
+    pad.addEventListener('pointermove', addSample, { passive: false });
+    pad.addEventListener('pointerdown', addSample, { passive: false });
+    pad.addEventListener('keydown', addSample);
+    button.addEventListener('click', finish);
+    document.body.appendChild(overlay);
+    window.__icons?.render?.(overlay);
+    pad.focus();
+  });
+}
+
+async function userChatFingerprint(publicKeyJwk) {
+  const canonical = JSON.stringify({
+    crv: publicKeyJwk.crv,
+    kty: publicKeyJwk.kty,
+    x: publicKeyJwk.x,
+    y: publicKeyJwk.y
+  });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return Array.from(new Uint8Array(digest))
+    .slice(0, 12)
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('')
+    .match(/.{1,4}/g)
+    .join('-')
+    .toUpperCase();
+}
+
+async function deriveUserChatAesKey(publicKeyJwk) {
+  const publicKey = await crypto.subtle.importKey('jwk', publicKeyJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  return crypto.subtle.deriveKey(
+    { name: 'ECDH', public: publicKey },
+    userChatState.keyPair.privateKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptUserChatText(text, recipientPublicKeyJwk) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveUserChatAesKey(recipientPublicKeyJwk);
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text));
+  return {
+    ciphertext: arrayBufferToBase64(ciphertext),
+    iv: arrayBufferToBase64(iv)
+  };
+}
+
+async function decryptUserChatRow(row) {
+  try {
+    const peerKey = row.direction === 'sent'
+      ? userChatState.selected.publicKeyJwk
+      : row.senderPublicKeyJwk;
+    const key = await deriveUserChatAesKey(peerKey);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: base64ToUint8Array(row.iv) },
+      key,
+      base64ToUint8Array(row.ciphertext)
+    );
+    return { ...row, text: new TextDecoder().decode(plaintext) };
+  } catch (err) {
+    return { ...row, text: '[Unable to decrypt on this device]' };
+  }
+}
+
+function arrayBufferToBase64(value) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+  let binary = '';
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+}
+
+function base64ToUint8Array(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+window.__hydrateMenuPanel = () => {
+  main?.classList.add('panel-open');
+  fetchAccount();
+  loadMenuLanding();
+};
+
+window.__dehydrateMenuPanel = () => {
+  main?.classList.remove('panel-open');
+};
+
+function togglePanel(event) {
+  togglePanelChrome(event);
+}
+
+document.addEventListener('click', event => {
+  if (event.__menuToggleHandled) return;
+  const button = event.target.closest?.('#fabMenu');
+  if (!button) return;
+  togglePanel(event);
 });
-closeBtn.addEventListener('click', () => setPanelOpen(false));
+closeBtn?.addEventListener('click', () => setPanelOpen(false));
 document.addEventListener('pointerdown', event => {
   if (!panel.classList.contains('open')) return;
-  if (panel.contains(event.target) || menuBtn.contains(event.target)) return;
+  if (panel.contains(event.target) || event.target.closest?.('#fabMenu')) return;
   setPanelOpen(false);
 });
 window.addEventListener('hal:memory-changed', () => {

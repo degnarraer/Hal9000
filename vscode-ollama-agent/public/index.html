@@ -6,12 +6,13 @@
   <meta name="theme-color" content="#020712">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Big HAL">
+  <meta name="apple-mobile-web-app-title" content="Bob">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Ollama Assistant</title>
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" href="/big_hal.png" type="image/png">
-  <link rel="apple-touch-icon" href="/big_hal.png">
+  <title>Bob</title>
+  <link rel="manifest" href="/manifest.webmanifest?v=bob-face-20260621">
+  <link rel="icon" href="/icons/bob-face.svg" type="image/svg+xml">
+  <link rel="icon" href="/icons/bob-face-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="/icons/bob-face-180.png">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -22,7 +23,38 @@
         <div class="voice-strip" aria-label="Voice activity">
           <div class="voice-panel ai-voice">
             <div class="voice-label voice-label-row">
-              <span><i data-lucide="bot"></i> AI</span>
+              <span class="bob-voice-title">
+                <span class="bob-face-shell" aria-hidden="true">
+                  <svg id="bobFace" class="bob-face" viewBox="0 0 512 512">
+                    <rect width="512" height="512" rx="96" fill="#020712"/>
+                    <g id="bobHead">
+                      <path id="bobHeadTop" d="M64 64h384l-32-32H96Z" fill="#1f3f82" opacity=".6"/>
+                      <path id="bobHeadRight" d="M416 64l32-32v448l-32-32Z" fill="#1f3f82" opacity=".52"/>
+                      <path id="bobHeadBottom" d="M64 448h384l-32 32H96Z" fill="#1f3f82" opacity=".48"/>
+                      <path id="bobHeadLeft" d="M64 64L32 32v448l32-32Z" fill="#1f3f82" opacity=".22"/>
+                      <rect id="bobHeadFront" x="64" y="64" width="384" height="384" rx="64" fill="#071229" stroke="#00e0ff" stroke-width="10"/>
+                    </g>
+                    <g id="bobFaceFeatures">
+                      <g id="bobForehead">
+                        <path id="bobForeheadLine1" d="M160 104 Q256 94 352 104" stroke="#dfe9ff" stroke-width="7" stroke-linecap="round" fill="none" opacity=".16"/>
+                        <path id="bobForeheadLine2" d="M186 126 Q256 119 326 126" stroke="#dfe9ff" stroke-width="5" stroke-linecap="round" fill="none" opacity=".1"/>
+                      </g>
+                      <g id="bobBrow">
+                        <path id="bobLeftBrow" d="M124 150h104" stroke="#00e0ff" stroke-width="16" stroke-linecap="round" opacity=".72"/>
+                        <path id="bobRightBrow" d="M284 150h104" stroke="#7c5cff" stroke-width="16" stroke-linecap="round" opacity=".72"/>
+                      </g>
+                      <g id="bobEyes">
+                        <ellipse id="bobLeftEye" cx="186" cy="236" rx="34" ry="34" fill="#00e0ff"/>
+                        <ellipse id="bobRightEye" cx="326" cy="236" rx="34" ry="34" fill="#7c5cff"/>
+                        <path id="bobLeftEyeIcon" fill="#00e0ff" opacity="0"/>
+                        <path id="bobRightEyeIcon" fill="#7c5cff" opacity="0"/>
+                      </g>
+                      <path id="bobMouth" d="M160 334h192" stroke="#dfe9ff" stroke-width="28" stroke-linecap="round" fill="none"/>
+                    </g>
+                  </svg>
+                </span>
+                Bob
+              </span>
               <div class="ai-card-controls">
                 <div class="model-picker" hidden>
                   <label for="model">Model</label>
@@ -65,7 +97,7 @@
                 <div id="vttOutput" class="vtt-output" aria-live="polite"></div>
               </div>
               <div class="input-wrapper">
-                <input id="input" autocomplete="off" autocapitalize="sentences" enterkeyhint="send" placeholder="Ask Big Hal" />
+                <input id="input" autocomplete="off" autocapitalize="sentences" enterkeyhint="send" placeholder="Ask Bob" />
                 <button id="micToggle" class="btn-mic" type="button" aria-label="Toggle microphone" title="Toggle microphone">
                   <i data-lucide="mic"></i>
                 </button>
@@ -89,12 +121,15 @@
   </div>
 
   <script src="/vendor/lucide/lucide.min.js"></script>
+  <script src="/bob-expression-engine.js"></script>
   <script src="/app.js"></script>
   <script src="/mic.js"></script>
   <script src="/menu/memory.js"></script>
   <script src="/menu/web-search.js"></script>
+  <script src="/menu/yahoo.js"></script>
   <script src="/menu/models.js"></script>
   <script src="/menu/monitor.js"></script>
+  <script src="/menu/app-tester.js"></script>
   <script src="/menu/dashboards.js"></script>
   <script src="/menu/logging-remote.js"></script>
   <script src="/menu.js"></script>

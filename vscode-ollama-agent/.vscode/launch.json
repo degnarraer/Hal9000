@@ -4,7 +4,7 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Launch Extension",
+            "name": "Extension / Launch VS Code Extension",
             "program": "${workspaceFolder}/src/extension.ts",
             "outFiles": ["${workspaceFolder}/out/**/*.js"],
             "preLaunchTask": "npm: watch",
@@ -19,12 +19,12 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Launch Server and Open Browser",
+            "name": "Local Dev / Start Server and Open Browser",
             "program": "${workspaceFolder}/scripts/start-server.js",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
-            "preLaunchTask": "stop-server",
-            "postDebugTask": "stop-server",
+            "preLaunchTask": "Local Dev / Stop Server",
+            "postDebugTask": "Local Dev / Stop Server",
             "serverReadyAction": {
                 "pattern": "Server listening on (http://localhost:[0-9]+)",
                 "uriFormat": "%s",
@@ -34,7 +34,7 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Stop Server",
+            "name": "Local Dev / Stop Server",
             "program": "${workspaceFolder}/scripts/stop-server.js",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
@@ -43,7 +43,7 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Check New Server Prereqs",
+            "name": "Server Setup / Check Prerequisites",
             "runtimeExecutable": "powershell",
             "runtimeArgs": [
                 "-ExecutionPolicy",
@@ -58,7 +58,7 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Install New Server Prereqs",
+            "name": "Server Setup / Install Prerequisites",
             "runtimeExecutable": "powershell",
             "runtimeArgs": [
                 "-ExecutionPolicy",
@@ -72,7 +72,7 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Full New Server Install",
+            "name": "Server Setup / Full Install",
             "runtimeExecutable": "powershell",
             "runtimeArgs": [
                 "-ExecutionPolicy",
@@ -87,7 +87,7 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Install WSL for Docker",
+            "name": "Server Setup / Install WSL for Docker",
             "runtimeExecutable": "powershell",
             "runtimeArgs": [
                 "-ExecutionPolicy",
@@ -102,7 +102,7 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Install New Server Prereqs and Persist PATH",
+            "name": "Server Setup / Install Prerequisites and Save PATH",
             "runtimeExecutable": "powershell",
             "runtimeArgs": [
                 "-ExecutionPolicy",
@@ -117,7 +117,7 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Start Docker Desktop",
+            "name": "Docker / Start Docker Desktop",
             "runtimeExecutable": "powershell",
             "runtimeArgs": [
                 "-ExecutionPolicy",
@@ -131,13 +131,55 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Deploy Prod Web",
+            "name": "Public Website / Redeploy Everything",
             "runtimeExecutable": "powershell",
             "runtimeArgs": [
                 "-ExecutionPolicy",
                 "Bypass",
-                "-File",
-                "${workspaceFolder}/scripts/deploy-prod-web.ps1"
+                "-Command",
+                "npm.cmd run public-site:redeploy"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Public Website / Fix DuckDNS URL Update",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "npm.cmd run public-site:fix-duckdns"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Public Website / Flush DNS Cache",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "npm.cmd run public-site:flush-dns"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Public Website / Check URL and Ports",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "npm.cmd run public-site:check"
             ],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal"
@@ -145,7 +187,7 @@
         {
             "type": "node",
             "request": "attach",
-            "name": "Attach to Server",
+            "name": "Local Dev / Attach to Server",
             "processId": "${command:PickProcess}",
             "skipFiles": ["<node_internals>/**"]
         }

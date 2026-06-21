@@ -102,6 +102,18 @@
     },
     {
       "method": "*",
+      "pattern": "/icons/bob-face.svg",
+      "security": "public",
+      "description": "Bob face image required by the public login screen."
+    },
+    {
+      "method": "*",
+      "pattern": "/bob-expression-engine.js",
+      "security": "public",
+      "description": "Bob expression engine script required by the public login screen."
+    },
+    {
+      "method": "*",
       "pattern": "/vendor/lucide/*",
       "security": "public",
       "description": "Icon library required by the public login screen."

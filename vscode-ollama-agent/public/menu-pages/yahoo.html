@@ -1,0 +1,33 @@
+<section class="panel-view yahoo-skill">
+  <div class="monitor-toolbar">
+    <h3>Yahoo</h3>
+    <button id="linkYahooAccount" type="button">
+      <i data-lucide="link"></i>
+      Link
+    </button>
+  </div>
+
+  <div id="yahooStatus" class="model-status">Checking Yahoo account link...</div>
+
+  <section class="monitor-card">
+    <h4>Account</h4>
+    <div id="yahooAccountDetails" class="yahoo-account-details">
+      <div class="empty">No Yahoo account linked</div>
+    </div>
+    <div class="yahoo-actions">
+      <button id="refreshYahooToken" type="button">
+        <i data-lucide="refresh-cw"></i>
+        Refresh token
+      </button>
+      <button id="disconnectYahooAccount" class="danger" type="button">
+        <i data-lucide="unlink"></i>
+        Disconnect
+      </button>
+    </div>
+  </section>
+
+  <section class="monitor-card">
+    <h4>Access</h4>
+    <div id="yahooAccessDetails" class="yahoo-access-details"></div>
+  </section>
+</section>

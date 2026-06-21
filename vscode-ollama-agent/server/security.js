@@ -80,7 +80,13 @@ function isPublicBrowserAsset(req) {
   if (!['GET', 'HEAD'].includes(req.method)) return false;
   return [
     '/style.css',
-    '/big_hal.png'
+    '/big_hal.png',
+    '/manifest.webmanifest',
+    '/bob-expression-engine.js',
+    '/icons/bob-face.svg',
+    '/icons/bob-face-180.png',
+    '/icons/bob-face-192.png',
+    '/icons/bob-face-512.png'
   ].includes(req.path) || req.path.startsWith('/vendor/lucide/');
 }
 

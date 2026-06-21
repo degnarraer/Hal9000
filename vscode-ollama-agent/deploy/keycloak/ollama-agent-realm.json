@@ -19,18 +19,20 @@
       "redirectUris": [
         "http://localhost:3000/auth/callback",
         "http://app.localhost/auth/callback",
-        "https://app.localhost/auth/callback"
+        "https://app.localhost/auth/callback",
+        "https://bobassist.duckdns.org/auth/callback"
       ],
       "webOrigins": [
         "http://localhost:3000",
         "http://app.localhost",
-        "https://app.localhost"
+        "https://app.localhost",
+        "https://bobassist.duckdns.org"
       ],
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "attributes": {
-        "post.logout.redirect.uris": "http://app.localhost/*##https://app.localhost/*"
+        "post.logout.redirect.uris": "http://app.localhost/*##https://app.localhost/*##https://bobassist.duckdns.org/*"
       },
       "protocolMappers": [
         {

@@ -1,6 +1,7 @@
 ﻿// Extracted from menu.js. Loaded after public/menu.js.
 function initMemory() {
   byId('refreshMemory')?.addEventListener('click', fetchMemoryManager);
+  byId('wipeMemory')?.addEventListener('click', wipeMemory);
   fetchMemoryManager();
   startMemoryAutoRefresh();
 }
@@ -31,7 +32,7 @@ function renderMemorySummaries(summaries) {
     const summary = summaries[scope] || {};
     const text = byId(`memorySummary${capitalize(scope)}`);
     const meta = byId(`memoryMeta${capitalize(scope)}`);
-    if (text) text.textContent = summary.summary || 'No summary yet. HAL will form this memory automatically as the conversation grows.';
+    if (text) text.textContent = summary.summary || 'No summary yet. Bob will form this memory automatically as the conversation grows.';
     if (meta) {
       const updated = summary.updatedAt ? formatTime(summary.updatedAt) : 'never';
       meta.textContent = `${summary.sourceMessageCount || 0} messages - ${summary.model || 'no model'} - updated ${updated}`;
@@ -111,6 +112,86 @@ async function deleteMemoryItem(kind, id) {
     await fetchMemoryManager({ silent: true });
   } catch (err) {
     if (status) status.textContent = `Memory delete error: ${err.message}`;
+  }
+}
+
+function confirmMemoryWipe() {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'hal-dialog-overlay';
+    overlay.innerHTML = `
+      <div class="hal-dialog memory-wipe-dialog" role="dialog" aria-modal="true" aria-labelledby="memoryWipeTitle">
+        <div class="hal-dialog-header">
+          <span class="hal-dialog-mark danger"><i data-lucide="triangle-alert"></i></span>
+          <h2 id="memoryWipeTitle">Wipe Memory</h2>
+        </div>
+        <p>This permanently deletes Bob's saved chat messages, memory summaries, and user factoids for your account. This cannot be undone.</p>
+        <label class="memory-wipe-confirm">
+          <span>Type WIPE to confirm</span>
+          <input id="memoryWipeConfirmInput" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="hal-dialog-actions">
+          <button class="hal-dialog-secondary" type="button" data-dialog-cancel>Cancel</button>
+          <button class="hal-dialog-primary danger" type="button" data-dialog-confirm disabled>Wipe Memory</button>
+        </div>
+      </div>
+    `;
+
+    const input = overlay.querySelector('#memoryWipeConfirmInput');
+    const confirm = overlay.querySelector('[data-dialog-confirm]');
+    const close = value => {
+      document.removeEventListener('keydown', onKeyDown);
+      overlay.remove();
+      resolve(value);
+    };
+    const onKeyDown = event => {
+      if (event.key === 'Escape') close(false);
+      if (event.key === 'Enter' && input.value === 'WIPE') close(true);
+    };
+
+    input.addEventListener('input', () => {
+      confirm.disabled = input.value !== 'WIPE';
+    });
+    confirm.addEventListener('click', () => close(input.value === 'WIPE'));
+    overlay.querySelector('[data-dialog-cancel]')?.addEventListener('click', () => close(false));
+    overlay.addEventListener('pointerdown', event => {
+      if (event.target === overlay) close(false);
+    });
+    document.addEventListener('keydown', onKeyDown);
+    document.body.appendChild(overlay);
+    window.__icons?.render?.(overlay);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+    input.focus();
+  });
+}
+
+async function wipeMemory() {
+  const button = byId('wipeMemory');
+  const status = byId('memoryStatus');
+  const confirmed = await confirmMemoryWipe();
+  if (!confirmed) return;
+
+  button?.setAttribute('disabled', 'disabled');
+  if (status) status.textContent = 'Wiping memory...';
+
+  try {
+    const response = await fetchWithAuthRedirect('/api/memory', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: 'WIPE' })
+    });
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Could not wipe memory');
+    const deleted = json.data || {};
+    if (status) {
+      status.textContent = `Memory wiped: ${deleted.messages || 0} messages, ${deleted.summaries || 0} summaries, ${deleted.factoids || 0} factoids deleted.`;
+    }
+    await fetchMemoryManager({ silent: true });
+    window.dispatchEvent(new CustomEvent('hal:memory-changed'));
+  } catch (err) {
+    if (status) status.textContent = `Memory wipe error: ${err.message}`;
+  } finally {
+    button?.removeAttribute('disabled');
   }
 }
 

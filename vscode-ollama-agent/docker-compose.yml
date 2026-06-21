@@ -8,8 +8,10 @@ services:
     environment:
       APP_HOST: ${APP_HOST:-app.localhost}
       AUTH_HOST: ${AUTH_HOST:-auth.localhost}
+      VAULT_HOST: ${VAULT_HOST:-vault.localhost}
       APP_SITE: ${APP_SITE:-http://app.localhost}
       AUTH_SITE: ${AUTH_SITE:-http://auth.localhost}
+      VAULT_SITE: ${VAULT_SITE:-http://vault.localhost}
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -19,18 +21,24 @@ services:
         aliases:
           - app.localhost
           - auth.localhost
+          - vault.localhost
           - ${APP_HOST:-app.localhost}
           - ${AUTH_HOST:-auth.localhost}
+          - ${VAULT_HOST:-vault.localhost}
       app_net:
         aliases:
           - app.localhost
           - auth.localhost
+          - vault.localhost
           - ${APP_HOST:-app.localhost}
           - ${AUTH_HOST:-auth.localhost}
+          - ${VAULT_HOST:-vault.localhost}
     depends_on:
       app:
         condition: service_healthy
       keycloak:
+        condition: service_started
+      vaultwarden:
         condition: service_started
 
   duckdns:
@@ -144,6 +152,22 @@ services:
       keycloak-db:
         condition: service_healthy
 
+  vaultwarden:
+    image: vaultwarden/server:latest
+    restart: unless-stopped
+    expose:
+      - "80"
+    environment:
+      DOMAIN: ${VAULT_SITE:-http://vault.localhost}
+      SIGNUPS_ALLOWED: ${VAULTWARDEN_SIGNUPS_ALLOWED:-false}
+      INVITATIONS_ALLOWED: ${VAULTWARDEN_INVITATIONS_ALLOWED:-true}
+      ADMIN_TOKEN: ${VAULTWARDEN_ADMIN_TOKEN:-change-me-before-production}
+      WEBSOCKET_ENABLED: "true"
+    volumes:
+      - vaultwarden_data:/data
+    networks:
+      - app_net
+
   keycloak-db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -194,3 +218,4 @@ volumes:
   ollama_data:
   keycloak_db_data:
   memory_db_data:
+  vaultwarden_data:

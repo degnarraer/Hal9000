@@ -4,11 +4,20 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const DEFAULT_TTS_PROVIDER = 'google';
-const SUPPORTED_TTS_PROVIDERS = new Set(['google', 'piper']);
+const SUPPORTED_TTS_PROVIDERS = new Set(['google', 'piper', 'windows']);
 
 function getTtsProvider(env = process.env) {
   const provider = String(env.TTS_PROVIDER || DEFAULT_TTS_PROVIDER).trim().toLowerCase();
   return SUPPORTED_TTS_PROVIDERS.has(provider) ? provider : DEFAULT_TTS_PROVIDER;
+}
+
+function getSupportedTtsProviders() {
+  return Array.from(SUPPORTED_TTS_PROVIDERS);
+}
+
+function resolveTtsProvider(value, fallback = getTtsProvider()) {
+  const provider = String(value || fallback || DEFAULT_TTS_PROVIDER).trim().toLowerCase();
+  return SUPPORTED_TTS_PROVIDERS.has(provider) ? provider : fallback;
 }
 
 function tempAudioPath(extension = 'wav') {
@@ -56,6 +65,15 @@ function piperArgsForOutput(outPath, env = process.env) {
   if (env.TTS_PIPER_NOISE_W) args.push('--noise_w', env.TTS_PIPER_NOISE_W);
 
   return args;
+}
+
+function buildPiperEnv(overrides = {}, env = process.env) {
+  const merged = { ...env };
+  if (overrides.speaker !== undefined && overrides.speaker !== '') merged.TTS_PIPER_SPEAKER = String(overrides.speaker);
+  if (overrides.lengthScale !== undefined && overrides.lengthScale !== '') merged.TTS_PIPER_LENGTH_SCALE = String(overrides.lengthScale);
+  if (overrides.noiseScale !== undefined && overrides.noiseScale !== '') merged.TTS_PIPER_NOISE_SCALE = String(overrides.noiseScale);
+  if (overrides.noiseW !== undefined && overrides.noiseW !== '') merged.TTS_PIPER_NOISE_W = String(overrides.noiseW);
+  return merged;
 }
 
 function runCommandWithText({ bin, args, text, outPath, timeoutMs = 60000 }) {
@@ -118,6 +136,9 @@ async function synthesizePiperSpeech(text, env = process.env) {
 
 module.exports = {
   getTtsProvider,
+  getSupportedTtsProviders,
+  resolveTtsProvider,
+  buildPiperEnv,
   piperArgsForOutput,
   splitTextForTts,
   synthesizePiperSpeech

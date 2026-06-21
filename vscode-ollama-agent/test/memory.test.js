@@ -31,16 +31,16 @@ test('buildPrompt includes saved memory summaries and recent transcript', () => 
   assert.match(prompt, /Short term memory: The user is debugging chat memory\./);
   assert.match(prompt, /Medium term memory: The user prefers backend behavior/);
   assert.match(prompt, /<recent_transcript>/);
-  assert.match(prompt, /Current user message:\nWhat should we do next\?/);
+  assert.match(prompt, /<current_user_message>\nWhat should we do next\?\n<\/current_user_message>/);
 });
 
 test('buildPrompt can use summaries without recent history', () => {
   const memory = createMemoryStore({ warn() {}, error() {}, info() {} });
   const prompt = memory.buildPrompt('Hello again', [], {
-    long: { title: 'Long term memory', summary: 'The user likes HAL to remember durable preferences.' }
+    long: { title: 'Long term memory', summary: 'The user likes Bob to remember durable preferences.' }
   });
 
-  assert.match(prompt, /Long term memory: The user likes HAL/);
+  assert.match(prompt, /Long term memory: The user likes Bob/);
   assert.doesNotMatch(prompt, /<recent_transcript>/);
 });
 
@@ -52,4 +52,28 @@ test('buildPrompt includes user factoids', () => {
 
   assert.match(prompt, /<user_factoids>/);
   assert.match(prompt, /workflow: The user prefers live backend memory/);
+});
+
+test('buildPrompt keeps rules separate from the current user message', () => {
+  const memory = createMemoryStore({ warn() {}, error() {}, info() {} });
+  const prompt = memory.buildPrompt('Hello', [], {}, [], {
+    systemInstructions: ['System: Prefer concise answers.']
+  });
+
+  assert.match(prompt, /<system_instructions>\nSystem: Prefer concise answers\.\n<\/system_instructions>/);
+  assert.match(prompt, /<current_user_message>\nHello\n<\/current_user_message>/);
+});
+
+test('buildPrompt labels previous assistant output as background only', () => {
+  const memory = createMemoryStore({ warn() {}, error() {}, info() {} });
+  const prompt = memory.buildPrompt(
+    'Hi',
+    [{ role: 'assistant', content: 'Can you explain machine learning?' }],
+    { short: { title: 'Short term memory', summary: 'Bob previously introduced an unrelated AI topic.' } }
+  );
+
+  assert.match(prompt, /not an example to imitate/);
+  assert.match(prompt, /<recent_transcript>\nAssistant: Can you explain machine learning\?/);
+  assert.match(prompt, /<current_user_message>\nHi\n<\/current_user_message>/);
+  assert.match(prompt, /Respond to <current_user_message> now\.$/);
 });

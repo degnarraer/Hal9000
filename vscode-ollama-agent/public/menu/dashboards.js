@@ -1,4 +1,12 @@
 ﻿// Extracted from menu.js. Loaded after public/menu.js.
+let usersCache = [];
+
+function initUsers() {
+  byId('refreshUsers')?.addEventListener('click', fetchUsersDashboard);
+  byId('usersFilter')?.addEventListener('input', renderCachedUsers);
+  fetchUsersDashboard();
+}
+
 function initActivity() {
   byId('refreshActivity')?.addEventListener('click', fetchActivityDashboard);
   byId('autoRefreshActivity')?.addEventListener('change', toggleActivityAutoRefresh);
@@ -11,6 +19,126 @@ function initSecurity() {
   byId('autoRefreshSecurity')?.addEventListener('change', toggleSecurityAutoRefresh);
   fetchSecurityDashboard();
   startSecurityAutoRefresh();
+}
+
+async function fetchUsersDashboard() {
+  const status = byId('usersStatus');
+  if (status) status.textContent = 'Refreshing users...';
+
+  try {
+    const response = await fetchWithAuthRedirect('/api/admin/users', { cache: 'no-store' });
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Users unavailable');
+    usersCache = json.data?.users || [];
+    renderUsersSummary(usersCache, json.data?.persistent);
+    renderCachedUsers();
+    if (status) status.textContent = json.data?.persistent ? 'Users loaded from activity and role records.' : 'Database unavailable; showing current session only.';
+  } catch (err) {
+    if (status) status.textContent = 'Users error: ' + err.message;
+  }
+}
+
+function renderUsersSummary(users, persistent) {
+  const target = byId('usersSummary');
+  if (!target) return;
+  const admins = users.filter(user => (user.roles || []).includes('admin')).length;
+  const online = users.filter(user => user.online).length;
+  target.innerHTML = `
+    <div class="metric"><span>Known</span><strong>${escapeHtml(users.length)}</strong></div>
+    <div class="metric"><span>Online</span><strong>${escapeHtml(online)}</strong></div>
+    <div class="metric"><span>Admins</span><strong>${escapeHtml(admins)}</strong></div>
+    <div class="metric"><span>Storage</span><strong>${persistent ? 'Database' : 'Session'}</strong></div>
+  `;
+}
+
+function renderCachedUsers() {
+  const filter = String(byId('usersFilter')?.value || '').trim().toLowerCase();
+  const users = usersCache.filter(user => {
+    if (!filter) return true;
+    return [user.name, user.email, user.userKey, (user.roles || []).join(' ')]
+      .some(value => String(value || '').toLowerCase().includes(filter));
+  });
+  renderUsers(users);
+}
+
+function renderUsers(users) {
+  const target = byId('usersList');
+  if (!target) return;
+  if (!users.length) {
+    target.innerHTML = '<div class="empty">No users found</div>';
+    return;
+  }
+
+  target.innerHTML = users.map(user => {
+    const roles = user.roles || ['user'];
+    const isAdmin = roles.includes('admin');
+    const hasLocalAdmin = (user.appRoles || []).includes('admin');
+    const isSelf = user.userKey === currentUser.subject || user.email === currentUser.email;
+    const adminAction = isAdmin && !hasLocalAdmin ? 'external' : isAdmin ? 'remove' : 'add';
+    const adminIcon = adminAction === 'external' ? 'shield-check' : isAdmin ? 'shield-minus' : 'shield-plus';
+    const adminLabel = adminAction === 'external' ? 'External admin' : isAdmin ? 'Remove admin' : 'Make admin';
+    return `
+      <div class="users-row">
+        <div class="users-identity">
+          <span class="users-presence ${user.online ? 'online' : ''}" title="${user.online ? 'Online' : 'Offline'}"></span>
+          <div>
+            <strong>${escapeHtml(user.email || user.name || 'User')}</strong>
+            <small>${escapeHtml(user.name || user.userKey || '')}</small>
+          </div>
+        </div>
+        <div class="users-meta">
+          <span>${escapeHtml(roles.join(', '))}</span>
+          <small>${escapeHtml(user.online ? user.currentAction || 'Online' : `Last seen ${formatTime(user.lastSeenAt)}`)}</small>
+        </div>
+        <button class="users-role-btn ${adminAction === 'remove' ? 'danger' : ''}" type="button" data-user-admin="${adminAction}" data-user-key="${escapeHtml(user.userKey)}" data-user-email="${escapeHtml(user.email || '')}" data-user-name="${escapeHtml(user.name || '')}" ${adminAction === 'external' ? 'disabled title="Managed by identity provider"' : isSelf && isAdmin ? 'title="Remove with care"' : ''}>
+          <i data-lucide="${adminIcon}"></i>
+          ${adminLabel}
+        </button>
+      </div>
+    `;
+  }).join('');
+
+  target.querySelectorAll('[data-user-admin]').forEach(button => {
+    button.addEventListener('click', () => toggleUserAdmin(button));
+  });
+  window.__icons?.render?.(target);
+}
+
+async function toggleUserAdmin(button) {
+  const action = button.dataset.userAdmin;
+  if (action === 'external') return;
+  const userKey = button.dataset.userKey;
+  const email = button.dataset.userEmail || '';
+  const name = button.dataset.userName || '';
+  const status = byId('usersStatus');
+
+  if (action === 'remove') {
+    const confirmed = await window.__dialog.confirm({
+      title: 'Remove Admin',
+      message: `Remove admin access from ${email || name || userKey}?`,
+      confirmText: 'Remove Admin',
+      danger: true
+    });
+    if (!confirmed) return;
+  }
+
+  button.disabled = true;
+  if (status) status.textContent = action === 'remove' ? 'Removing admin role...' : 'Granting admin role...';
+
+  try {
+    const response = await fetchWithAuthRedirect(`/api/admin/users/${encodeURIComponent(userKey)}/roles/admin`, {
+      method: action === 'remove' ? 'DELETE' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: action === 'remove' ? undefined : JSON.stringify({ email, name })
+    });
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Role update failed');
+    await fetchUsersDashboard();
+    await fetchAccount();
+  } catch (err) {
+    if (status) status.textContent = 'Role update error: ' + err.message;
+    button.disabled = false;
+  }
 }
 
 function loadChartJs() {
