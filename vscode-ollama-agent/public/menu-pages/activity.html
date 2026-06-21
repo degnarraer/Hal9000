@@ -1,0 +1,46 @@
+<section class="panel-view activity-dashboard">
+  <div class="monitor-toolbar">
+    <h3>Activity Monitor</h3>
+    <button id="refreshActivity" type="button">
+      <i data-lucide="refresh-cw"></i>
+      Refresh
+    </button>
+    <label class="monitor-toggle">
+      <input id="autoRefreshActivity" type="checkbox" checked>
+      Auto
+    </label>
+  </div>
+
+  <div id="activitySummary" class="monitor-summary"></div>
+
+  <div class="activity-chart-grid">
+    <section class="monitor-card activity-chart-card">
+      <h4>Connection Rates</h4>
+      <canvas id="activityRatesChart" height="170"></canvas>
+    </section>
+
+    <section class="monitor-card activity-chart-card">
+      <h4>Users Online</h4>
+      <canvas id="activityUsersChart" height="170"></canvas>
+    </section>
+
+    <section class="monitor-card activity-chart-card wide">
+      <h4>Requests</h4>
+      <canvas id="activityRequestsChart" height="150"></canvas>
+    </section>
+  </div>
+
+  <div class="monitor-grid">
+    <section class="monitor-card">
+      <h4>Online Users</h4>
+      <div id="activityUsers" class="activity-table"></div>
+    </section>
+
+    <section class="monitor-card">
+      <h4>Recent Activity</h4>
+      <div id="activityEvents" class="activity-table"></div>
+    </section>
+  </div>
+
+  <div id="activityStatus" class="model-status"></div>
+</section>

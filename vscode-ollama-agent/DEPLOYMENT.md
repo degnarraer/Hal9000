@@ -99,6 +99,21 @@ admin / change-me-before-production
 
 Change all `change-me-before-production` values before exposing this outside your machine.
 
+## Application Administrators
+
+Keycloak manages identities, while the app manages its own administrator level for model installation, monitoring, logs, and remote server controls.
+
+The first app administrator can be bootstrapped only while no administrator exists. Configure at least one of:
+
+```env
+ADMIN_BOOTSTRAP_USERS=you@example.com
+ADMIN_BOOTSTRAP_TOKEN=<generated strong secret>
+```
+
+After signing in as a matching bootstrap user, open the menu and use the shield-plus button beside your account. Local `app.localhost` development requests can also bootstrap the first admin.
+
+If you use Keycloak or another OIDC provider to send app roles, the app also recognizes `admin` or `administrator` in common role claims such as `roles`, `groups`, Keycloak realm roles, and `ollama-agent` client roles.
+
 ## Multiple Docker Environments
 
 The repo supports named Compose environments so dev and production-style stacks use separate Compose project names, networks, containers, and volumes.

@@ -8,6 +8,8 @@ services:
     environment:
       APP_HOST: ${APP_HOST:-app.localhost}
       AUTH_HOST: ${AUTH_HOST:-auth.localhost}
+      APP_SITE: ${APP_SITE:-http://app.localhost}
+      AUTH_SITE: ${AUTH_SITE:-http://auth.localhost}
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -31,6 +33,29 @@ services:
       keycloak:
         condition: service_started
 
+  duckdns:
+    image: curlimages/curl:latest
+    restart: unless-stopped
+    profiles:
+      - duckdns
+    environment:
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:-}
+      DUCKDNS_DOMAINS: ${DUCKDNS_DOMAINS:-}
+    command:
+      - sh
+      - -c
+      - |
+        test -n "$$DUCKDNS_TOKEN" || { echo "DUCKDNS_TOKEN is required"; exit 1; }
+        test -n "$$DUCKDNS_DOMAINS" || { echo "DUCKDNS_DOMAINS is required"; exit 1; }
+        while true; do
+          echo "Updating DuckDNS domains: $$DUCKDNS_DOMAINS"
+          curl -fsS "https://www.duckdns.org/update?domains=$$DUCKDNS_DOMAINS&token=$$DUCKDNS_TOKEN&ip="
+          echo
+          sleep 300
+        done
+    networks:
+      - public_net
+
   app:
     build: .
     restart: unless-stopped
@@ -49,6 +74,14 @@ services:
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-change-me-before-production}
       OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://app.localhost/auth/callback}
       OIDC_REGISTRATION_ENDPOINT: ${OIDC_REGISTRATION_ENDPOINT:-}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me-before-production}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-change-me-before-production}
+      MEMORY_ENABLED: ${MEMORY_ENABLED:-true}
+      MEMORY_HISTORY_LIMIT: ${MEMORY_HISTORY_LIMIT:-12}
+      MEMORY_DB_PASSWORD: ${MEMORY_DB_PASSWORD:-change-me-before-production}
+      MEMORY_DATABASE_URL: postgres://memory:${MEMORY_DB_PASSWORD:-change-me-before-production}@memory-db:5432/memory
+      ADMIN_BOOTSTRAP_USERS: ${ADMIN_BOOTSTRAP_USERS:-}
+      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:-}
     networks:
       - app_net
     depends_on:
@@ -56,6 +89,8 @@ services:
         condition: service_started
       keycloak:
         condition: service_started
+      memory-db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -85,7 +120,7 @@ services:
     command:
       - start-dev
       - --import-realm
-      - --hostname=http://${AUTH_HOST:-auth.localhost}
+      - --hostname=${AUTH_SITE:-http://auth.localhost}
       - --hostname-strict=false
       - --proxy-headers=xforwarded
     expose:
@@ -101,7 +136,8 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me-before-production}
     volumes:
-      - ./deploy/keycloak/ollama-agent-realm.json:/opt/keycloak/data/import/ollama-agent-realm.json:ro
+      - ${KEYCLOAK_REALM_IMPORT:-./deploy/keycloak/ollama-agent-realm.json}:/opt/keycloak/data/import/ollama-agent-realm.json:ro
+      - ./deploy/keycloak/themes/bighal:/opt/keycloak/themes/bighal:ro
     networks:
       - app_net
     depends_on:
@@ -128,6 +164,26 @@ services:
       retries: 10
       start_period: 10s
 
+  memory-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_DB: memory
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: ${MEMORY_DB_PASSWORD:-change-me-before-production}
+    volumes:
+      - memory_db_data:/var/lib/postgresql/data
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memory -d memory"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
 networks:
   public_net:
   app_net:
@@ -137,3 +193,4 @@ volumes:
   caddy_config:
   ollama_data:
   keycloak_db_data:
+  memory_db_data:

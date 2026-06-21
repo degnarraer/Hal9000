@@ -106,3 +106,16 @@ For an internet-facing setup with separated services, Keycloak authentication, P
 6. The model will be fetched and installed automatically
 
 Alternatively, you can manually enter a model name in the **Manual Install** section (e.g., `llama2`, `mistral:7b`, etc.) and click **Install**.
+
+### Better local text-to-speech
+
+The server can use Piper for more natural offline voice output instead of the browser speech fallback. Install Piper separately, download a Piper voice model, then set:
+
+```env
+TTS_PROVIDER=piper
+TTS_PIPER_BIN=piper
+TTS_PIPER_MODEL=C:\voices\en_US-lessac-medium.onnx
+TTS_PIPER_CONFIG=C:\voices\en_US-lessac-medium.onnx.json
+```
+
+If Piper is not configured or fails at runtime, the server falls back to the existing Google TTS path and then the Windows local speech fallback. The active server-side provider is exposed at `/api/tts/status`.

@@ -1,0 +1,29 @@
+<section class="panel-view activity-dashboard">
+  <div class="monitor-toolbar">
+    <h3>Security Monitor</h3>
+    <button id="refreshSecurity" type="button">
+      <i data-lucide="refresh-cw"></i>
+      Refresh
+    </button>
+    <label class="monitor-toggle">
+      <input id="autoRefreshSecurity" type="checkbox" checked>
+      Auto
+    </label>
+  </div>
+
+  <div id="securitySummary" class="monitor-summary"></div>
+
+  <div class="activity-chart-grid">
+    <section class="monitor-card activity-chart-card wide">
+      <h4>Security Events</h4>
+      <canvas id="securityTimelineChart" height="160"></canvas>
+    </section>
+  </div>
+
+  <section class="monitor-card">
+    <h4>Recent Security Events</h4>
+    <div id="securityEvents" class="activity-table security-events-table"></div>
+  </section>
+
+  <div id="securityStatus" class="model-status"></div>
+</section>

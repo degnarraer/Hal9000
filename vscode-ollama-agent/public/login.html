@@ -3,49 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Sign in - Ollama Assistant</title>
+  <title>Sign in - Big Hal</title>
+  <link rel="icon" href="/big_hal.png" type="image/png">
+  <link rel="apple-touch-icon" href="/big_hal.png">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body class="login-body">
   <main class="login-shell">
-    <section class="login-info-panel" aria-label="Workspace summary">
-      <div class="login-brand compact">
-        <span class="login-mark">HAL</span>
-        <div>
-          <h1>Ollama Assistant</h1>
-          <p>Private AI operations console</p>
-        </div>
-      </div>
-
-      <div class="login-system-card">
-        <div class="system-card-header">
-          <span>Gateway Status</span>
-          <strong>Protected</strong>
-        </div>
-        <div class="system-lines">
-          <span></span>
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
-      </div>
-
-      <div class="login-feature-list">
-        <div><i data-lucide="shield-check"></i><span>OIDC authentication enforced before the workspace loads.</span></div>
-        <div><i data-lucide="server"></i><span>Ollama remains behind the application gateway.</span></div>
-        <div><i data-lucide="activity"></i><span>Requests are logged with security pass/fail status.</span></div>
-      </div>
-    </section>
-
     <section class="login-panel" aria-label="Authentication">
-      <div class="login-topline">
-        <span class="login-status-dot"></span>
-        <span>Secured workspace</span>
-      </div>
-
-      <div class="login-copy">
-        <h2>Welcome back</h2>
-        <p>Sign in with your identity provider to access chat, model controls, monitoring, and remote administration.</p>
+      <div class="login-brand">
+        <img class="login-mark" src="/big_hal.png" alt="Big Hal">
+        <h1>Big Hal</h1>
+        <p>Your Personal Assistant</p>
       </div>
 
       <div class="login-actions">
@@ -58,13 +27,6 @@
           Create account
         </a>
       </div>
-
-      <div class="login-meta">
-        <span><i data-lucide="key-round"></i> Keycloak ready</span>
-        <span><i data-lucide="lock-keyhole"></i> Session protected</span>
-      </div>
-
-      <p class="login-note">Accounts are managed by Keycloak or your configured OIDC provider.</p>
     </section>
   </main>
   <script src="/vendor/lucide/lucide.min.js"></script>

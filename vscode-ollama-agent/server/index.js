@@ -10,19 +10,35 @@ const { exec, spawn } = require('child_process');
 const Logger = require('./logger');
 const { getAvailableModels, formatModelRef } = require('./ollamaModels');
 const { createSecurityMiddleware } = require('./security');
+const { createMemoryStore } = require('./memory');
+const { createAdminStore } = require('./admin');
+const { createActivityMonitor } = require('./activity');
+const { createSecurityEventStore } = require('./securityEvents');
+const { shouldSearchWeb, extractSearchQuery, searchWeb, buildWebSummaryPrompt } = require('./webSearch');
+const { getTtsProvider, splitTextForTts, synthesizePiperSpeech } = require('./tts');
 
 const app = express();
 
 const PORT = process.env.PORT || 3000;
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'llama2';
+const MEMORY_SUMMARY_INTERVALS = {
+  short: Number(process.env.MEMORY_SHORT_SUMMARY_INTERVAL || 6),
+  medium: Number(process.env.MEMORY_MEDIUM_SUMMARY_INTERVAL || 20),
+  long: Number(process.env.MEMORY_LONG_SUMMARY_INTERVAL || 60)
+};
 // Support custom OLLAMA_BIN path (useful on Windows where ollama may not be on PATH)
 const OLLAMA_BIN = process.env.OLLAMA_BIN || 'ollama';
 const DEPLOYMENT_ENV = process.env.DEPLOYMENT_ENV || process.env.NODE_ENV || 'development';
+const TTS_PROVIDER = getTtsProvider();
 
 // instantiate logger early so top-level functions (loadRules, routes) can use it without causing a TDZ
 const logger = new Logger({ bufferSize: 2000 });
-const security = createSecurityMiddleware(logger);
+const securityEvents = createSecurityEventStore(logger);
+const security = createSecurityMiddleware(logger, securityEvents);
+const memory = createMemoryStore(logger);
+const admin = createAdminStore(logger, securityEvents);
+const activity = createActivityMonitor(logger);
 
 function validateProductionConfig() {
   if (DEPLOYMENT_ENV !== 'production') return;
@@ -31,7 +47,8 @@ function validateProductionConfig() {
   const unsafeValues = [
     ['OIDC_CLIENT_SECRET', process.env.OIDC_CLIENT_SECRET],
     ['KEYCLOAK_ADMIN_PASSWORD', process.env.KEYCLOAK_ADMIN_PASSWORD],
-    ['KEYCLOAK_DB_PASSWORD', process.env.KEYCLOAK_DB_PASSWORD]
+    ['KEYCLOAK_DB_PASSWORD', process.env.KEYCLOAK_DB_PASSWORD],
+    ['MEMORY_DB_PASSWORD', process.env.MEMORY_DB_PASSWORD]
   ].filter(([, value]) => !value || unsafeSecretValues.has(value));
 
   if (unsafeValues.length > 0) {
@@ -40,6 +57,10 @@ function validateProductionConfig() {
 
   if (String(process.env.SECURITY_SECURE_COOKIES || '').toLowerCase() !== 'true') {
     throw new Error('Production deployment requires SECURITY_SECURE_COOKIES=true');
+  }
+
+  if (String(process.env.SECURITY_ENABLED || '').toLowerCase() !== 'true') {
+    throw new Error('Production deployment requires SECURITY_ENABLED=true');
   }
 
   if (!String(process.env.OIDC_ISSUER || '').startsWith('https://')) {
@@ -74,6 +95,8 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'app' });
 });
 app.use(security.authenticate);
+app.use(admin.attachRoles);
+app.use(activity.record);
 app.post('/auth/logout', security.logout);
 app.get('/api/auth/me', (req, res) => {
   const user = req.user || {};
@@ -82,7 +105,9 @@ app.get('/api/auth/me', (req, res) => {
     data: {
       name: user.name || user.preferred_username || user.email || 'Signed in user',
       email: user.email || user.preferred_username || user.upn || '',
-      subject: user.sub || ''
+      subject: user.sub || '',
+      roles: req.roles || ['user'],
+      isAdmin: Boolean(req.roles?.includes('admin'))
     }
   });
 });
@@ -99,6 +124,7 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
   }
 }));
 app.use('/vendor/lucide', express.static(path.join(__dirname, '..', 'node_modules', 'lucide', 'dist', 'umd')));
+app.use('/vendor/chart.js', express.static(path.join(__dirname, '..', 'node_modules', 'chart.js', 'dist')));
 
 function buildTtsOptions(lang) {
   return {
@@ -151,23 +177,47 @@ function synthesizeLocalSpeech(text) {
   });
 }
 
-// TTS endpoint: returns same-origin audio chunks generated through google-tts-api
+async function synthesizeConfiguredSpeech(text, lang) {
+  if (TTS_PROVIDER === 'piper') {
+    return synthesizePiperSpeech(text);
+  }
+
+  return synthesizeGoogleSpeech(text, lang);
+}
+
+async function synthesizeGoogleSpeech(text, lang) {
+  const base64 = await gtts.getAudioBase64(text, buildTtsOptions(lang));
+  return {
+    audio: Buffer.from(base64, 'base64'),
+    contentType: 'audio/mpeg',
+    provider: 'google'
+  };
+}
+
+// TTS endpoint: returns same-origin audio chunks generated through the configured provider.
 app.get('/api/tts', async (req, res) => {
   const text = req.query.text || '';
   const lang = req.query.lang || 'en';
   if (!text) return res.status(400).json({ ok: false, error: 'text required' });
   try {
-    const options = buildTtsOptions(lang);
-    const chunks = text.length > 200
-      ? gtts.getAllAudioUrls(text, options).map(item => item.shortText)
-      : [text];
+    const chunks = splitTextForTts(text, TTS_PROVIDER === 'piper' ? 350 : 200);
     const urls = chunks.map(chunk => `/api/tts/audio?lang=${encodeURIComponent(lang)}&text=${encodeURIComponent(chunk)}`);
 
-    res.json({ ok: true, urls, url: urls[0] });
+    res.json({ ok: true, provider: TTS_PROVIDER, urls, url: urls[0] });
   } catch (err) {
     logger.error('tts error', err);
     res.status(500).json({ ok: false, error: String(err) });
   }
+});
+
+app.get('/api/tts/status', (req, res) => {
+  res.json({
+    ok: true,
+    data: {
+      provider: TTS_PROVIDER,
+      piperConfigured: Boolean(process.env.TTS_PIPER_MODEL || process.env.PIPER_MODEL)
+    }
+  });
 });
 
 app.get('/api/tts/audio', async (req, res) => {
@@ -176,21 +226,34 @@ app.get('/api/tts/audio', async (req, res) => {
   if (!text) return res.status(400).json({ ok: false, error: 'text required' });
 
   try {
-    let audio;
-    let contentType = 'audio/mpeg';
+    let result;
 
     try {
-      const base64 = await gtts.getAudioBase64(text, buildTtsOptions(lang));
-      audio = Buffer.from(base64, 'base64');
+      result = await synthesizeConfiguredSpeech(text, lang);
     } catch (err) {
-      logger.warn('google-tts-api audio failed, using local speech fallback', err?.message || err);
-      audio = await synthesizeLocalSpeech(text);
-      contentType = 'audio/wav';
+      logger.warn(`${TTS_PROVIDER} tts failed`, err?.message || err);
+      if (TTS_PROVIDER === 'piper') {
+        try {
+          result = await synthesizeGoogleSpeech(text, lang);
+        } catch (googleErr) {
+          logger.warn('google-tts-api audio failed, using local speech fallback', googleErr?.message || googleErr);
+        }
+      }
+
+      if (!result) {
+        logger.warn('using local speech fallback');
+        result = {
+          audio: await synthesizeLocalSpeech(text),
+          contentType: 'audio/wav',
+          provider: 'windows'
+        };
+      }
     }
 
-    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('X-TTS-Provider', result.provider);
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.send(audio);
+    res.send(result.audio);
   } catch (err) {
     logger.error('tts audio error', err);
     res.status(500).json({ ok: false, error: String(err) });
@@ -253,6 +316,7 @@ function applyAiRules(req, res, next) {
   // inject system-level prefix
   const prep = (AI_RULES.transformations && AI_RULES.transformations.prepend) || [];
   const transformedPrompt = prep.join('\n') + '\n' + prompt + '\n' + (AI_RULES.transformations && AI_RULES.transformations.append || []).join('\n');
+  req.ai = { originalPrompt: prompt, transformedPrompt };
   if (req.body) req.body.prompt = transformedPrompt;
   if (req.query) req.query.prompt = transformedPrompt;
   next();
@@ -290,21 +354,255 @@ function sendSseError(res, err) {
   res.end();
 }
 
+function buildMemorySummaryPrompt(scope, transcript) {
+  const instructions = {
+    short: 'Create a concise short-term memory summary of the latest conversation. Capture immediate goals, current task state, preferences stated today, and unresolved next steps. Keep it under 120 words.',
+    medium: 'Create a medium-term memory summary across the recent conversation history. Capture recurring preferences, active projects, decisions, constraints, and useful context. Keep it under 250 words.',
+    long: 'Create a long-term memory summary suitable for durable personalization. Capture stable user preferences, enduring projects, identity/context facts the user intentionally revealed, and durable operating principles. Avoid transient details. Keep it under 400 words.'
+  };
+
+  return [
+    'You are HAL memory summarization skill.',
+    instructions[scope] || instructions.short,
+    'Only summarize information supported by the transcript. Do not invent facts.',
+    'Write in third person about the user and HAL. Do not include markdown tables.',
+    '',
+    '<conversation_transcript>',
+    transcript || '(No conversation messages yet.)',
+    '</conversation_transcript>'
+  ].join('\n');
+}
+
+function buildFactoidExtractionPrompt(transcript) {
+  return [
+    'You are HAL memory factoid extraction skill.',
+    'Extract durable facts about the user that would help future conversations.',
+    'Only include facts explicitly supported by the transcript. Do not infer sensitive attributes, secrets, medical facts, financial account data, or credentials.',
+    'Prefer stable preferences, ongoing projects, names the user asked HAL to remember, working style, environment details, and durable constraints.',
+    'Return only JSON with this shape: {"factoids":[{"factKey":"short-stable-key","category":"preference|project|identity|environment|workflow|constraint|general","fact":"The user ...","confidence":0.0}]}',
+    'If there are no durable user facts, return {"factoids":[]}.',
+    '',
+    '<conversation_transcript>',
+    transcript || '(No conversation messages yet.)',
+    '</conversation_transcript>'
+  ].join('\n');
+}
+
+async function generateOllamaText(model, prompt, options = {}) {
+  const response = await axios.post(`${OLLAMA_URL}/api/generate`, {
+    model,
+    prompt,
+    stream: false,
+    options
+  }, {
+    responseType: 'json',
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 120000
+  });
+
+  return String(response.data?.response || '').trim();
+}
+
+async function runWebSearchSkill({ req, model, prompt }) {
+  const query = extractSearchQuery(prompt);
+  const results = await searchWeb(query);
+  const summaryPrompt = buildWebSummaryPrompt(prompt, query, results);
+  const summary = await generateOllamaText(model, summaryPrompt, { temperature: 0.2 });
+  const fallback = results.length
+    ? [
+        `I searched the web for "${query}" and found these sources:`,
+        '',
+        ...results.map((item, index) => `${index + 1}. ${item.title} - ${item.url}${item.snippet ? `\n   ${item.snippet}` : ''}`)
+      ].join('\n')
+    : `I searched the web for "${query}", but I could not find usable results.`;
+
+  return {
+    query,
+    results,
+    response: summary || fallback
+  };
+}
+
+const memorySummaryJobs = new Set();
+const memoryFactoidJobs = new Set();
+
+function transcriptFromMessages(messages) {
+  return messages
+    .map(row => `${row.role === 'assistant' ? 'HAL' : row.role === 'system' ? 'System' : 'User'}: ${row.content}`)
+    .join('\n\n');
+}
+
+async function refreshMemorySummary({ req, model, scope, conversationId = 'default' }) {
+  const scopeConfig = memory.summaryScopes[scope];
+  if (!scopeConfig) throw new Error('Invalid memory scope');
+
+  const messages = await memory.getMessages({ req, limit: scopeConfig.limit, conversationId });
+  const summaryText = await generateOllamaText(model, buildMemorySummaryPrompt(scope, transcriptFromMessages(messages)), { temperature: 0.2 });
+  return memory.saveSummary({
+    req,
+    scope,
+    summary: summaryText || 'No durable memory has been formed yet.',
+    sourceMessageCount: messages.length,
+    model
+  });
+}
+
+async function updateMemorySummariesAfterTurn({ req, model, conversationId = 'default' }) {
+  try {
+    const [summaries, messageCount] = await Promise.all([
+      memory.getSummaries({ req }),
+      memory.getMessageCount({ req, conversationId })
+    ]);
+
+    const dueScopes = Object.keys(memory.summaryScopes).filter(scope => {
+      const interval = Math.max(1, MEMORY_SUMMARY_INTERVALS[scope] || 1);
+      const sourceCount = Number(summaries[scope]?.sourceMessageCount || 0);
+      return messageCount > 0 && messageCount - sourceCount >= interval;
+    });
+
+    for (const scope of dueScopes) {
+      const jobKey = `${memory.userKey(req)}:${conversationId}:${scope}`;
+      if (memorySummaryJobs.has(jobKey)) continue;
+
+      memorySummaryJobs.add(jobKey);
+      refreshMemorySummary({ req, model, scope, conversationId })
+        .then(summary => logger.info(`Memory ${scope} summary refreshed from ${summary.sourceMessageCount} messages`))
+        .catch(err => logger.warn(`Memory ${scope} summary refresh failed`, getErrorText(err)))
+        .finally(() => memorySummaryJobs.delete(jobKey));
+    }
+  } catch (err) {
+    logger.warn('Memory summary scheduler failed', getErrorText(err));
+  }
+}
+
+function parseFactoidExtraction(text) {
+  if (!text) return [];
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) return [];
+  try {
+    const parsed = JSON.parse(match[0]);
+    return Array.isArray(parsed.factoids) ? parsed.factoids : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+async function updateMemoryFactoidsAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null }) {
+  const jobKey = `${memory.userKey(req)}:${conversationId}:factoids`;
+  if (memoryFactoidJobs.has(jobKey)) return;
+
+  memoryFactoidJobs.add(jobKey);
+  try {
+    const messages = await memory.getMessages({ req, limit: 16, conversationId });
+    const text = await generateOllamaText(model, buildFactoidExtractionPrompt(transcriptFromMessages(messages)), { temperature: 0.1 });
+    const saved = await memory.saveFactoids({
+      req,
+      model,
+      sourceMessageId,
+      factoids: parseFactoidExtraction(text)
+    });
+    if (saved.length > 0) logger.info(`Memory factoids refreshed: ${saved.length} saved`);
+  } catch (err) {
+    logger.warn('Memory factoid refresh failed', getErrorText(err));
+  } finally {
+    memoryFactoidJobs.delete(jobKey);
+  }
+}
+
+function updateMemoryAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null }) {
+  updateMemorySummariesAfterTurn({ req, model, conversationId });
+  updateMemoryFactoidsAfterTurn({ req, model, conversationId, sourceMessageId });
+}
+
 // expose rules endpoints
-app.get('/api/rules', (req, res) => {
+app.get('/api/rules', admin.requireAdmin, (req, res) => {
   res.json({ ok: true, data: AI_RULES });
 });
-app.post('/api/rules', (req, res) => {
+app.post('/api/rules', admin.requireAdmin, (req, res) => {
   // basic: overwrite file (in real app add auth)
   try { fs.writeFileSync(RULES_PATH, JSON.stringify(req.body, null, 2), 'utf8'); loadRules(); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+app.get('/api/memory/history', memory.historyHandler);
+app.get('/api/memory/manager', memory.managerHandler);
+app.delete('/api/memory/messages/:id', async (req, res) => {
+  try {
+    const deleted = await memory.deleteMessage({ req, id: req.params.id });
+    if (!deleted) return res.status(404).json({ ok: false, error: 'Chat memory item not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error('memory message delete failed', getErrorText(err));
+    res.status(500).json({ ok: false, error: 'Could not delete chat memory item' });
+  }
+});
+app.delete('/api/memory/factoids/:id', async (req, res) => {
+  try {
+    const deleted = await memory.deleteFactoid({ req, id: req.params.id });
+    if (!deleted) return res.status(404).json({ ok: false, error: 'Factoid not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error('memory factoid delete failed', getErrorText(err));
+    res.status(500).json({ ok: false, error: 'Could not delete factoid' });
+  }
+});
+app.post('/api/memory/summarize', async (req, res) => {
+  const scope = req.body?.scope || 'short';
+  const scopeConfig = memory.summaryScopes[scope];
+  if (!scopeConfig) return res.status(400).json({ ok: false, error: 'Invalid memory scope' });
+
+  try {
+    const model = req.body?.model || DEFAULT_MODEL;
+    const summary = await refreshMemorySummary({ req, model, scope, conversationId: req.body?.conversationId || 'default' });
+    res.json({ ok: true, data: summary });
+  } catch (err) {
+    const error = getErrorText(err);
+    logger.error(`memory summarize ${scope} failed`, error);
+    res.status(err?.response?.status || 500).json({ ok: false, error });
+  }
+});
+app.get('/api/admin/bootstrap/status', admin.bootstrapStatus);
+app.post('/api/admin/bootstrap', admin.bootstrapSelf);
+app.get('/api/activity/dashboard', admin.requireAdmin, activity.dashboard);
+app.get('/api/security/dashboard', admin.requireAdmin, securityEvents.dashboard);
+
 // Non-streaming API proxy (awaits full response)
 app.post('/api/chat', applyAiRules, async (req, res) => {
   try {
     const { model, prompt, parameters } = req.body;
-    const payload = Object.assign({ model: model || DEFAULT_MODEL, prompt: prompt || '' }, parameters || {});
+    const chatModel = model || DEFAULT_MODEL;
+    const originalPrompt = req.ai?.originalPrompt || prompt || '';
+
+    if (shouldSearchWeb(originalPrompt)) {
+      const search = await runWebSearchSkill({ req, model: chatModel, prompt: originalPrompt });
+      await memory.addMessage({ req, role: 'user', model: chatModel, content: originalPrompt });
+      await memory.addMessage({
+        req,
+        role: 'assistant',
+        model: chatModel,
+        content: search.response,
+        metadata: { skill: 'web-search', query: search.query, results: search.results }
+      });
+      updateMemoryAfterTurn({ req, model: chatModel });
+      return res.json({
+        ok: true,
+        data: {
+          response: search.response,
+          done: true,
+          skill: 'web-search',
+          query: search.query,
+          sources: search.results
+        }
+      });
+    }
+
+    const [history, summaries, factoids] = await Promise.all([
+      memory.getRecent({ req }),
+      memory.getSummaries({ req }),
+      memory.getFactoids({ req, limit: 50 })
+    ]);
+    const promptWithMemory = memory.buildPrompt(prompt || '', history, summaries, factoids);
+    const payload = Object.assign({ model: chatModel, prompt: promptWithMemory }, parameters || {});
 
     const resp = await axios.post(`${OLLAMA_URL}/api/generate`, payload, {
       responseType: 'json',
@@ -312,6 +610,9 @@ app.post('/api/chat', applyAiRules, async (req, res) => {
       timeout: 120000
     });
 
+    await memory.addMessage({ req, role: 'user', model: chatModel, content: originalPrompt });
+    const assistantMessage = await memory.addMessage({ req, role: 'assistant', model: chatModel, content: resp.data?.response || JSON.stringify(resp.data) });
+    updateMemoryAfterTurn({ req, model: chatModel, sourceMessageId: assistantMessage?.id });
     res.json({ ok: true, data: resp.data });
   } catch (err) {
     const error = getErrorText(err);
@@ -324,11 +625,46 @@ app.post('/api/chat', applyAiRules, async (req, res) => {
 app.get('/api/stream', applyAiRules, async (req, res) => {
   const model = req.query.model || DEFAULT_MODEL;
   const prompt = req.query.prompt || '';
+  const originalPrompt = req.ai?.originalPrompt || prompt;
 
-  const payload = { model, prompt };
   logger.info(`Streaming chat request using model ${model}`);
 
   try {
+    if (shouldSearchWeb(originalPrompt)) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders && res.flushHeaders();
+
+      await memory.addMessage({ req, role: 'user', model, content: originalPrompt });
+      const search = await runWebSearchSkill({ req, model, prompt: originalPrompt });
+      await memory.addMessage({
+        req,
+        role: 'assistant',
+        model,
+        content: search.response,
+        metadata: { skill: 'web-search', query: search.query, results: search.results }
+      });
+      updateMemoryAfterTurn({ req, model });
+
+      res.write(`data: ${JSON.stringify({
+        response: search.response,
+        done: true,
+        skill: 'web-search',
+        query: search.query,
+        sources: search.results
+      })}\n\n`);
+      res.write('event: done\ndata: [DONE]\n\n');
+      return res.end();
+    }
+
+    const [history, summaries, factoids] = await Promise.all([
+      memory.getRecent({ req }),
+      memory.getSummaries({ req }),
+      memory.getFactoids({ req, limit: 50 })
+    ]);
+    const payload = { model, prompt: memory.buildPrompt(prompt, history, summaries, factoids) };
+    await memory.addMessage({ req, role: 'user', model, content: originalPrompt });
     const resp = await axios.post(`${OLLAMA_URL}/api/generate`, payload, {
       responseType: 'stream',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -341,15 +677,28 @@ app.get('/api/stream', applyAiRules, async (req, res) => {
     res.flushHeaders && res.flushHeaders();
 
     const stream = resp.data;
+    let assistantResponse = '';
 
     stream.on('data', (chunk) => {
       try {
         const text = chunk.toString();
-        text.split(/\r?\n/).forEach((line) => { if (!line) return; res.write(`data: ${line}\n\n`); });
+        text.split(/\r?\n/).forEach((line) => {
+          if (!line) return;
+          try {
+            const parsed = JSON.parse(line);
+            if (typeof parsed.response === 'string') assistantResponse += parsed.response;
+          } catch (parseErr) {}
+          res.write(`data: ${line}\n\n`);
+        });
       } catch (e) { res.write(`data: ${chunk}\n\n`); }
     });
 
-    stream.on('end', () => { res.write('event: done\ndata: [DONE]\n\n'); res.end(); });
+    stream.on('end', async () => {
+      const assistantMessage = await memory.addMessage({ req, role: 'assistant', model, content: assistantResponse });
+      updateMemoryAfterTurn({ req, model, sourceMessageId: assistantMessage?.id });
+      res.write('event: done\ndata: [DONE]\n\n');
+      res.end();
+    });
     stream.on('error', (err) => { logger.error('stream error', getErrorText(err)); sendSseError(res, err); });
     req.on('close', () => { stream.destroy && stream.destroy(); });
   } catch (err) {
@@ -388,7 +737,7 @@ app.get('/api/ollama/models', async (req, res) => {
 });
 
 // Pull/install a model via the ollama CLI
-app.post('/api/ollama/pull', (req, res) => {
+app.post('/api/ollama/pull', admin.requireAdmin, (req, res) => {
   const model = req.body.model;
   if (!model) return res.status(400).json({ ok: false, error: 'model required' });
   logger.info(`Starting ollama pull ${model}`);
@@ -413,7 +762,7 @@ app.post('/api/ollama/pull', (req, res) => {
 });
 
 // Remove a model via the ollama CLI
-app.post('/api/ollama/remove', (req, res) => {
+app.post('/api/ollama/remove', admin.requireAdmin, (req, res) => {
   const model = req.body.model;
   if (!model) return res.status(400).json({ ok: false, error: 'model required' });
   logger.info(`Starting ollama rm ${model}`);
@@ -442,7 +791,7 @@ app.post('/api/ollama/remove', (req, res) => {
 });
 
 // Monitor endpoint: try HTTP status, else run `ollama status` and return text
-app.get('/api/ollama/monitor', async (req, res) => {
+app.get('/api/ollama/monitor', admin.requireAdmin, async (req, res) => {
   try {
     const resp = await axios.get(`${OLLAMA_URL}/api/status`, { timeout: 5000 });
     logger.info('Ollama HTTP API /api/status succeeded');
@@ -460,7 +809,7 @@ app.get('/api/ollama/monitor', async (req, res) => {
 });
 
 // Available models list from Ollama's official library
-app.get('/api/ollama/available', async (req, res) => {
+app.get('/api/ollama/available', admin.requireAdmin, async (req, res) => {
   try {
     const models = await getAvailableModels(logger);
     logger.info(`Returning ${models.length} available models to client`);
@@ -472,7 +821,7 @@ app.get('/api/ollama/available', async (req, res) => {
 });
 
 // Remote control: soft reboot endpoint
-app.post('/api/control/reboot', (req, res) => {
+app.post('/api/control/reboot', admin.requireAdmin, (req, res) => {
   logger.info('Soft reboot requested via API');
   res.json({ ok: true, msg: 'Rebooting server' });
 
@@ -494,7 +843,7 @@ app.post('/api/control/reboot', (req, res) => {
   }
 });
 
-app.get('/api/ollama/monitor/details', async (req, res) => {
+app.get('/api/ollama/monitor/details', admin.requireAdmin, async (req, res) => {
   const request = async (method, endpoint, data) => {
     try {
       const resp = await axios({
@@ -533,7 +882,7 @@ app.get('/api/ollama/monitor/details', async (req, res) => {
   });
 });
 
-app.post('/api/ollama/show', async (req, res) => {
+app.post('/api/ollama/show', admin.requireAdmin, async (req, res) => {
   const model = req.body.model;
   if (!model) return res.status(400).json({ ok: false, error: 'model required' });
 
@@ -547,7 +896,7 @@ app.post('/api/ollama/show', async (req, res) => {
   }
 });
 
-app.post('/api/ollama/load', async (req, res) => {
+app.post('/api/ollama/load', admin.requireAdmin, async (req, res) => {
   const model = req.body.model;
   const keepAlive = req.body.keepAlive || '5m';
   if (!model) return res.status(400).json({ ok: false, error: 'model required' });
@@ -568,7 +917,7 @@ app.post('/api/ollama/load', async (req, res) => {
   }
 });
 
-app.post('/api/ollama/unload', async (req, res) => {
+app.post('/api/ollama/unload', admin.requireAdmin, async (req, res) => {
   const model = req.body.model;
   if (!model) return res.status(400).json({ ok: false, error: 'model required' });
 
@@ -588,32 +937,38 @@ app.post('/api/ollama/unload', async (req, res) => {
   }
 });
 
-app.post('/api/control/shutdown', (req, res) => {
+app.post('/api/control/shutdown', admin.requireAdmin, (req, res) => {
   logger.info('Shutdown requested via API');
   res.json({ ok: true, msg: 'Shutting down server' });
   setTimeout(() => shutdownServer(0), 100);
 });
 
 // Provide logs history
-app.get('/api/logs', (req, res) => {
+app.get('/api/logs', admin.requireAdmin, (req, res) => {
   res.json({ ok: true, data: logger.history(500) });
 });
 
 // SSE stream of logs
-app.get('/api/logs/stream', (req, res) => {
+app.get('/api/logs/stream', admin.requireAdmin, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders && res.flushHeaders();
 
   const send = (entry) => {
     res.write(`data: ${JSON.stringify(entry)}\n\n`);
   };
+  res.write('retry: 2000\n\n');
   // send recent history first
   logger.history(200).forEach(send);
   logger.on('log', send);
+  const heartbeat = setInterval(() => {
+    res.write(': heartbeat\n\n');
+  }, 30000);
 
   req.on('close', () => {
+    clearInterval(heartbeat);
     logger.removeListener('log', send);
   });
 });
@@ -623,7 +978,11 @@ function shutdownServer(exitCode = 0) {
   try {
     logger.info('Closing server connections');
     if (server) {
-      server.close(() => {
+      server.close(async () => {
+        await memory.shutdown();
+        await admin.shutdown();
+        await activity.shutdown();
+        await securityEvents.shutdown();
         logger.info('Server closed, exiting process');
         process.exit(exitCode);
       });

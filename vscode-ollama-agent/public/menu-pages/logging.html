@@ -1,5 +1,11 @@
-<section class="panel-view">
-  <h3>Server Logs</h3>
-  <div id="logsList" class="monitor-output">Loading...</div>
-  <button id="refreshLogs" type="button">Refresh</button>
+<section class="panel-view logging-view">
+  <div class="logging-toolbar">
+    <h3>Server Logs</h3>
+    <span id="logsStreamStatus" class="stream-status">Connecting...</span>
+    <button id="refreshLogs" type="button">
+      <i data-lucide="refresh-cw"></i>
+      Refresh
+    </button>
+  </div>
+  <div id="logsList" class="monitor-output logging-output">Loading...</div>
 </section>

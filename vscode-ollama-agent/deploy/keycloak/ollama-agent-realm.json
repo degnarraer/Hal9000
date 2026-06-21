@@ -3,6 +3,7 @@
   "enabled": true,
   "registrationAllowed": true,
   "loginWithEmailAllowed": true,
+  "loginTheme": "bighal",
   "duplicateEmailsAllowed": false,
   "resetPasswordAllowed": true,
   "verifyEmail": false,

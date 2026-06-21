@@ -130,6 +130,20 @@
         },
         {
             "type": "node",
+            "request": "launch",
+            "name": "Deploy Prod Web",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/deploy-prod-web.ps1"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
             "request": "attach",
             "name": "Attach to Server",
             "processId": "${command:PickProcess}",

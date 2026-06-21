@@ -96,6 +96,12 @@
     },
     {
       "method": "*",
+      "pattern": "/big_hal.png",
+      "security": "public",
+      "description": "Brand image required by the public login screen."
+    },
+    {
+      "method": "*",
       "pattern": "/vendor/lucide/*",
       "security": "public",
       "description": "Icon library required by the public login screen."

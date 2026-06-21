@@ -6,6 +6,7 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./tsconfig.json",
+    "test": "node --test",
     "watch": "tsc -watch -p ./tsconfig.json",
     "start-server": "node scripts/start-server.js",
     "stop-server": "node scripts/stop-server.js",
@@ -22,6 +23,7 @@
     "docker:dev:logs": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 dev logs -f",
     "docker:prod:config": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 prod config",
     "docker:prod:up": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 prod up --build -d",
+    "docker:prod:deploy-web": "powershell -ExecutionPolicy Bypass -File scripts/deploy-prod-web.ps1",
     "docker:prod:down": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 prod down",
     "docker:prod:logs": "powershell -ExecutionPolicy Bypass -File scripts/docker-env.ps1 prod logs -f",
     "secrets:generate": "node scripts/generate-secrets.js",
@@ -65,7 +67,8 @@
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "google-tts-api": "^2.0.1",
-    "lucide": "^1.18.0"
+    "lucide": "^1.18.0",
+    "pg": "^8.22.0"
   },
   "overrides": {
     "axios": "^1.18.0"

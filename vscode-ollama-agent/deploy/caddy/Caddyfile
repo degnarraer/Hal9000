@@ -1,9 +1,12 @@
-http://{$APP_HOST:app.localhost} {
+{$APP_SITE:http://app.localhost} {
   encode gzip zstd
   reverse_proxy app:3000
 }
 
-http://{$AUTH_HOST:auth.localhost} {
+{$AUTH_SITE:http://auth.localhost} {
   encode gzip zstd
+
+  redir / {$APP_SITE:http://app.localhost}/auth/login 302
+
   reverse_proxy keycloak:8080
 }

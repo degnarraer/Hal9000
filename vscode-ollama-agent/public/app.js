@@ -1,6 +1,7 @@
 const messagesEl = document.getElementById('messages');
 const input = document.getElementById('input');
 const send = document.getElementById('send');
+const clearChat = document.getElementById('clearChat');
 const modelSelect = document.getElementById('model');
 const refreshModels = document.getElementById('refreshModels');
 const defaultModel = 'llama2';
@@ -11,11 +12,69 @@ let aiAudioCtx;
 let aiAnalyser;
 let aiDataArray;
 let aiAnimationId;
+let audioUnlocked = false;
+let streamingSpeechActive = false;
+let streamingSpeechBuffer = '';
 
 const aiWaveform = document.getElementById('aiWaveform');
 const playbackSpeed = document.getElementById('playbackSpeed');
 const playbackRateLabel = document.getElementById('playbackRateLabel');
 const playbackRates = [0.75, 1, 1.25, 1.5, 1.75, 2];
+
+function showDialog({ title = 'Big HAL', message = '', confirmText = 'OK', cancelText = '', danger = false } = {}) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'hal-dialog-overlay';
+    overlay.innerHTML = `
+      <div class="hal-dialog" role="dialog" aria-modal="true" aria-labelledby="halDialogTitle">
+        <div class="hal-dialog-header">
+          <span class="hal-dialog-mark"><i data-lucide="${danger ? 'alert-triangle' : 'message-square'}"></i></span>
+          <h2 id="halDialogTitle">${escapeDialogHtml(title)}</h2>
+        </div>
+        <p>${escapeDialogHtml(message)}</p>
+        <div class="hal-dialog-actions">
+          ${cancelText ? `<button class="hal-dialog-secondary" type="button" data-dialog-cancel>${escapeDialogHtml(cancelText)}</button>` : ''}
+          <button class="hal-dialog-primary${danger ? ' danger' : ''}" type="button" data-dialog-confirm>${escapeDialogHtml(confirmText)}</button>
+        </div>
+      </div>
+    `;
+
+    const close = value => {
+      document.removeEventListener('keydown', onKeyDown);
+      overlay.remove();
+      resolve(value);
+    };
+    const onKeyDown = event => {
+      if (event.key === 'Escape') close(false);
+      if (event.key === 'Enter') close(true);
+    };
+
+    overlay.querySelector('[data-dialog-confirm]')?.addEventListener('click', () => close(true));
+    overlay.querySelector('[data-dialog-cancel]')?.addEventListener('click', () => close(false));
+    overlay.addEventListener('pointerdown', event => {
+      if (event.target === overlay) close(false);
+    });
+    document.addEventListener('keydown', onKeyDown);
+    document.body.appendChild(overlay);
+    renderIcons(overlay);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+    overlay.querySelector('[data-dialog-confirm]')?.focus();
+  });
+}
+
+function escapeDialogHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+window.__dialog = {
+  alert: options => showDialog({ confirmText: 'OK', ...(typeof options === 'string' ? { message: options } : options) }),
+  confirm: options => showDialog({ confirmText: 'Confirm', cancelText: 'Cancel', ...(typeof options === 'string' ? { message: options } : options) })
+};
 
 function renderIcons(root = document) {
   if (!window.lucide?.createIcons) return;
@@ -39,8 +98,31 @@ function addMessage(role, text) {
   return div;
 }
 
-// Clear messages on double-click
-messagesEl.addEventListener('dblclick', () => { messagesEl.innerHTML = ''; });
+async function loadMemoryHistory() {
+  try {
+    const response = await fetch('/api/memory/history?limit=24', { cache: 'no-store' });
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Memory history unavailable');
+    messagesEl.innerHTML = '';
+    (json.data || []).forEach(row => {
+      addMessage(row.role === 'assistant' ? 'bot' : 'user', row.content);
+    });
+  } catch (err) {
+    console.warn('Failed to load memory history', err);
+  }
+}
+
+async function clearVisibleChat() {
+  if (!messagesEl.children.length) return;
+  const shouldClear = await window.__dialog.confirm({
+    title: 'Clear Chat',
+    message: 'Clear the visible chat? Saved memory is not deleted.',
+    confirmText: 'Clear',
+    danger: true
+  });
+  if (!shouldClear) return;
+  messagesEl.innerHTML = '';
+}
 
 async function sendMessage() {
   const prompt = input.value.trim();
@@ -111,9 +193,28 @@ function unlockAudio() {
   try {
     aiAudioCtx = aiAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (aiAudioCtx.state === 'suspended') aiAudioCtx.resume();
+    unlockMediaPlayback();
   } catch (err) {
     console.warn('Audio unlock failed', err);
   }
+}
+
+function unlockMediaPlayback() {
+  if (audioUnlocked) return;
+
+  const audio = new Audio();
+  audio.muted = true;
+  audio.playsInline = true;
+  audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=';
+
+  audio.play()
+    .then(() => {
+      audio.pause();
+      audioUnlocked = true;
+    })
+    .catch(err => {
+      console.warn('Media playback unlock failed', err);
+    });
 }
 
 function setPlaybackRate(rate) {
@@ -162,25 +263,96 @@ async function speakText(text) {
 
     const urls = j.urls || (j.url ? [j.url] : []);
     setAiVoiceActive(true);
-    await playAudioUrls(urls);
+    await playAudioUrls(urls, 0, clean, false);
     setAiVoiceActive(false);
   } catch (err) {
     setAiVoiceActive(false);
     console.warn('TTS error', err);
+    speakWithBrowserVoice(clean);
   }
 }
 
-function playAudioUrls(urls, index = 0) {
-  if (!urls[index]) return Promise.resolve();
+function speakWithBrowserVoice(text) {
+  if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+
+  window.speechSynthesis.cancel();
+  speakBrowserChunk(text);
+}
+
+function speakBrowserChunk(text, onend) {
+  if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return null;
+
+  const utterance = new SpeechSynthesisUtterance(text.slice(0, 4500));
+  utterance.lang = 'en-US';
+  utterance.rate = playbackRate;
+  utterance.onstart = () => setAiVoiceActive(true);
+  utterance.onend = () => {
+    onend?.();
+    if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+      setAiVoiceActive(false);
+    }
+  };
+  utterance.onerror = () => setAiVoiceActive(false);
+  window.speechSynthesis.speak(utterance);
+  return utterance;
+}
+
+function startStreamingSpeech() {
+  streamingSpeechActive = Boolean(window.speechSynthesis && window.SpeechSynthesisUtterance);
+  streamingSpeechBuffer = '';
+  if (streamingSpeechActive) window.speechSynthesis.cancel();
+  return streamingSpeechActive;
+}
+
+function queueStreamingSpeech(text) {
+  if (!streamingSpeechActive || !text) return;
+
+  streamingSpeechBuffer += text.replace(/\s+/g, ' ');
+  const sentenceEnd = /[.!?]\s/.exec(streamingSpeechBuffer);
+  const shouldSpeakLongChunk = streamingSpeechBuffer.length >= 180;
+
+  if (!sentenceEnd && !shouldSpeakLongChunk) return;
+
+  const chunkEnd = sentenceEnd ? sentenceEnd.index + 1 : streamingSpeechBuffer.lastIndexOf(' ', 180);
+  const safeEnd = chunkEnd > 0 ? chunkEnd : streamingSpeechBuffer.length;
+  const chunk = streamingSpeechBuffer.slice(0, safeEnd).trim();
+  streamingSpeechBuffer = streamingSpeechBuffer.slice(safeEnd).trimStart();
+  if (chunk) speakBrowserChunk(chunk);
+}
+
+function finishStreamingSpeech() {
+  if (!streamingSpeechActive) return false;
+
+  const finalChunk = streamingSpeechBuffer.trim();
+  streamingSpeechBuffer = '';
+  streamingSpeechActive = false;
+  if (finalChunk) speakBrowserChunk(finalChunk);
+  return true;
+}
+
+function playAudioUrls(urls, index = 0, fallbackText = '', hadAudioError = false) {
+  if (!urls[index]) {
+    if (fallbackText && hadAudioError) speakWithBrowserVoice(fallbackText);
+    return Promise.resolve();
+  }
 
   return new Promise((resolve) => {
     currentAudio = new Audio(urls[index]);
+    currentAudio.preload = 'auto';
+    currentAudio.playsInline = true;
     currentAudio.playbackRate = playbackRate;
     connectAiWaveform(currentAudio);
-    currentAudio.onended = () => resolve(playAudioUrls(urls, index + 1));
-    currentAudio.onerror = () => resolve(playAudioUrls(urls, index + 1));
-    currentAudio.play().catch(err => {
+    currentAudio.onended = () => resolve(playAudioUrls(urls, index + 1, fallbackText, hadAudioError));
+    currentAudio.onerror = () => resolve(playAudioUrls(urls, index + 1, fallbackText, true));
+    currentAudio.play().catch(async err => {
       console.warn('Audio playback was blocked or failed', err);
+      try {
+        if (aiAudioCtx?.state === 'suspended') await aiAudioCtx.resume();
+        await currentAudio.play();
+      } catch (retryErr) {
+        console.warn('Audio playback retry failed', retryErr);
+        speakWithBrowserVoice(fallbackText);
+      }
       resolve();
     });
   });
@@ -255,21 +427,28 @@ function sendPrompt(prompt) {
   const url = `/api/stream?model=${encodeURIComponent(model)}&prompt=${encodeURIComponent(prompt)}`;
 
   const evt = new EventSource(url);
-  const botEl = addMessage('bot', `Using ${model}...`);
+  const botEl = addMessage('bot', 'Thinking');
   let partial = '';
+  const canSpeakStream = startStreamingSpeech();
 
   evt.onmessage = (e) => {
     const data = e.data;
     if (data === '[DONE]') { evt.close(); return; }
-    partial += parseOllamaChunk(data);
+    const chunk = parseOllamaChunk(data);
+    if (!chunk) return;
+    partial += chunk;
     botEl.textContent = partial;
+    queueStreamingSpeech(chunk);
   };
   evt.addEventListener('done', () => {
     evt.close();
-    speakText(partial);
+    if (!finishStreamingSpeech() && !canSpeakStream) speakText(partial);
+    window.dispatchEvent(new CustomEvent('hal:memory-changed'));
   });
   evt.addEventListener('error', (event) => {
     console.error('SSE error', event);
+    streamingSpeechActive = false;
+    streamingSpeechBuffer = '';
     if (event.data) {
       try {
         botEl.textContent = JSON.parse(event.data);
@@ -287,6 +466,7 @@ send.addEventListener('click', () => {
   unlockAudio();
   sendMessage();
 });
+clearChat?.addEventListener('click', clearVisibleChat);
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     unlockAudio();
@@ -308,7 +488,8 @@ refreshModels?.addEventListener('click', loadChatModels);
 
 setPlaybackRate(playbackRate);
 loadChatModels();
+loadMemoryHistory();
 renderIcons();
 
 window.__icons = { render: renderIcons };
-window.__chat = { sendPrompt, speakText, unlockAudio, setPlaybackRate, loadModels: loadChatModels };
+window.__chat = { sendPrompt, speakText, unlockAudio, setPlaybackRate, loadModels: loadChatModels, loadMemoryHistory };

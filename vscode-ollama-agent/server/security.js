@@ -79,8 +79,13 @@ function routePolicy(req, config) {
 function isPublicBrowserAsset(req) {
   if (!['GET', 'HEAD'].includes(req.method)) return false;
   return [
-    '/style.css'
+    '/style.css',
+    '/big_hal.png'
   ].includes(req.path) || req.path.startsWith('/vendor/lucide/');
+}
+
+function isHtmlPartialRequest(req) {
+  return ['GET', 'HEAD'].includes(req.method) && req.path.startsWith('/menu-pages/');
 }
 
 function statusIcon(statusCode, securityPassed) {
@@ -236,8 +241,12 @@ function isAuthorized(user, config) {
   return true;
 }
 
-function createSecurityMiddleware(logger) {
+function createSecurityMiddleware(logger, securityEvents = null) {
   const config = getConfig();
+
+  function recordSecurity(req, event) {
+    securityEvents?.record?.(req, event).catch(err => logger.error('Security event record failed', err?.message || err));
+  }
 
   function markPassed(req, user = null) {
     req.security = { passed: true };
@@ -265,7 +274,10 @@ function createSecurityMiddleware(logger) {
       const bearer = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
       if (bearer) {
         const user = await verifyJwt(bearer, config);
-        if (!isAuthorized(user, config)) return res.status(403).json({ ok: false, error: 'Forbidden' });
+        if (!isAuthorized(user, config)) {
+          recordSecurity(req, { severity: 'warn', type: 'auth_forbidden', actor: user.email || user.preferred_username || user.sub || 'bearer-user', status: 403, detail: 'Bearer token user is not allowed by configured allowlist' });
+          return res.status(403).json({ ok: false, error: 'Forbidden' });
+        }
         markPassed(req, user);
         return next();
       }
@@ -278,11 +290,20 @@ function createSecurityMiddleware(logger) {
       }
       if (sessionId) sessions.delete(sessionId);
 
-      if (req.path.startsWith('/api/')) return res.status(401).json({ ok: false, error: 'Authentication required' });
+      if (req.path.startsWith('/api/')) {
+        recordSecurity(req, { severity: 'warn', type: 'auth_required', status: 401, detail: 'Unauthenticated API request' });
+        return res.status(401).json({ ok: false, error: 'Authentication required' });
+      }
+      if (isHtmlPartialRequest(req)) {
+        recordSecurity(req, { severity: 'warn', type: 'auth_required', status: 401, detail: 'Unauthenticated partial request' });
+        return res.status(401).send('Authentication required');
+      }
       return res.redirect('/auth/login');
     } catch (err) {
       logger.warn(`security auth failed: ${err.message}`);
+      recordSecurity(req, { severity: 'warn', type: 'auth_failure', status: 401, detail: err.message });
       if (req.path.startsWith('/api/')) return res.status(401).json({ ok: false, error: 'Authentication failed' });
+      if (isHtmlPartialRequest(req)) return res.status(401).send('Authentication failed');
       return res.redirect('/auth/login');
     }
   }
@@ -367,16 +388,21 @@ function createSecurityMiddleware(logger) {
       });
 
       const user = await verifyJwt(tokenResp.data.id_token, config, state.nonce);
-      if (!isAuthorized(user, config)) return res.status(403).send('Forbidden');
+      if (!isAuthorized(user, config)) {
+        recordSecurity(req, { severity: 'warn', type: 'auth_forbidden', actor: user.email || user.preferred_username || user.sub || 'callback-user', status: 403, detail: 'OIDC user is not allowed by configured allowlist' });
+        return res.status(403).send('Forbidden');
+      }
 
       const sessionId = crypto.randomUUID();
       sessions.set(sessionId, { user, expiresAt: Date.now() + config.sessionTtlMs });
       res.setHeader('Set-Cookie', cookie('ollama_agent_session', sessionId, { secure: config.secureCookies, maxAge: Math.floor(config.sessionTtlMs / 1000) }));
+      recordSecurity(req, { severity: 'info', type: 'login_success', actor: user.email || user.preferred_username || user.sub || 'callback-user', status: 302, detail: 'OIDC login completed' });
       res.redirect('/');
     } catch (err) {
       const detail = err?.response?.data ? JSON.stringify(err.response.data) : err.message;
       logger.error(`OIDC callback failed: ${detail}`);
       console.error(`OIDC callback failed: ${detail}`);
+      recordSecurity(req, { severity: 'warn', type: 'login_failure', status: 401, detail });
       res.status(401).send(authErrorPage(detail));
     }
   }
@@ -385,6 +411,7 @@ function createSecurityMiddleware(logger) {
     markPassed(req, { name: 'auth-logout' });
     const sessionId = parseCookies(req.headers.cookie).ollama_agent_session;
     if (sessionId) sessions.delete(sessionId);
+    recordSecurity(req, { severity: 'info', type: 'logout', status: 302, detail: 'User logged out' });
     res.setHeader('Set-Cookie', clearCookie('ollama_agent_session', config.secureCookies));
     res.redirect('/auth/login');
   }
@@ -392,4 +419,4 @@ function createSecurityMiddleware(logger) {
   return { config, requestLogger: requestLogger(logger, config), securityHeaders: securityHeaders(config), authenticate, login, startLogin, register, callback, logout };
 }
 
-module.exports = { createSecurityMiddleware };
+module.exports = { createSecurityMiddleware, isHtmlPartialRequest, isPublicBrowserAsset, routeMatches };

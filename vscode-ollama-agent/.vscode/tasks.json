@@ -44,6 +44,19 @@
         "reveal": "silent",
         "panel": "shared"
       }
+    },
+    {
+      "label": "deploy-prod-web",
+      "type": "shell",
+      "command": "npm.cmd run docker:prod:deploy-web",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
     }
   ]
 }

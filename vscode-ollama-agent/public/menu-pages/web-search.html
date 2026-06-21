@@ -1,0 +1,27 @@
+<section class="panel-view web-search-skill">
+  <div class="monitor-toolbar">
+    <h3>Web Search Summary</h3>
+    <button id="runWebSearchSkill" type="button">
+      <i data-lucide="search"></i>
+      Search
+    </button>
+  </div>
+
+  <div class="web-search-form">
+    <textarea id="webSearchQuery" rows="4" placeholder="What should HAL search and summarize?"></textarea>
+  </div>
+
+  <div id="webSearchStatus" class="model-status"></div>
+
+  <section class="monitor-card web-search-summary-card">
+    <h4>Summary</h4>
+    <div id="webSearchOutput" class="web-search-output">Run a search to see the summary here.</div>
+  </section>
+
+  <section class="monitor-card">
+    <h4>Sources</h4>
+    <div id="webSearchSources" class="web-search-source-list">
+      <div class="empty">No sources yet</div>
+    </div>
+  </section>
+</section>

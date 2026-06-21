@@ -9,20 +9,34 @@ let recognitionRestartTimer;
 let manuallyStoppingRecognition = false;
 let speechRecognitionFailed = false;
 let detectedAudioWhileSpeechFailed = false;
+let composerDraftBeforeMic = '';
 const MAX_TRANSCRIPT_DISPLAY = 180;
 
 const canvas = document.getElementById('waveform');
 const vttOutput = document.getElementById('vttOutput');
 const micToggle = document.getElementById('micToggle');
+const composerInput = document.getElementById('input');
+const inputSection = document.querySelector('.input-section');
+const micAudioConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true
+};
 
 async function startMic() {
   console.log('startMic called');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    alert('getUserMedia not supported in this browser');
+    await window.__dialog.alert({
+      title: 'Microphone Unsupported',
+      message: 'getUserMedia is not supported in this browser.'
+    });
     return;
   }
 
-  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: micAudioConstraints
+  });
+  logAppliedMicSettings(mediaStream);
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   sourceNode = audioCtx.createMediaStreamSource(mediaStream);
   analyser = audioCtx.createAnalyser();
@@ -58,6 +72,54 @@ function stopMic() {
 
 function renderIcons() {
   window.__icons?.render?.();
+}
+
+function setMicButtonState(isRunning) {
+  if (!micToggle) return;
+
+  if (isRunning) {
+    composerDraftBeforeMic = composerInput?.value || '';
+    setComposerMicMode(true);
+  } else {
+    setComposerMicMode(false);
+  }
+
+  micToggle.dataset.running = isRunning ? '1' : '0';
+  micToggle.innerHTML = `<i data-lucide="${isRunning ? 'square' : 'mic'}"></i>`;
+  micToggle.setAttribute('aria-label', isRunning ? 'Stop voice input' : 'Start voice input');
+  micToggle.setAttribute('title', isRunning ? 'Stop voice input' : 'Start voice input');
+  micToggle.classList.toggle('active', isRunning);
+  renderIcons();
+}
+
+function setComposerMicMode(isRunning) {
+  if (!composerInput) return;
+
+  composerInput.readOnly = isRunning;
+  composerInput.classList.toggle('mic-live', isRunning);
+  inputSection?.classList.toggle('mic-active', isRunning);
+  composerInput.placeholder = isRunning ? 'Listening...' : 'Ask Big Hal';
+
+  if (isRunning) {
+    composerInput.value = '';
+    return;
+  }
+
+  composerInput.value = composerDraftBeforeMic;
+  composerDraftBeforeMic = '';
+}
+
+function logAppliedMicSettings(stream) {
+  const [track] = stream.getAudioTracks();
+  if (!track?.getSettings) return;
+
+  const settings = track.getSettings();
+  console.log('mic audio settings', {
+    echoCancellation: settings.echoCancellation,
+    noiseSuppression: settings.noiseSuppression,
+    autoGainControl: settings.autoGainControl,
+    deviceId: settings.deviceId ? 'set' : 'unset'
+  });
 }
 
 function drawWaveform() {
@@ -103,7 +165,7 @@ function drawWaveform() {
 function startSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
-    vttOutput.textContent = 'SpeechRecognition API not supported in this browser.';
+    setMicTranscript('SpeechRecognition API not supported in this browser.');
     return;
   }
   clearTimeout(recognitionRestartTimer);
@@ -187,35 +249,30 @@ function submitVoicePrompt(prompt) {
 }
 
 function setMicTranscript(text) {
-  if (!vttOutput) return;
-
   const clean = text.replace(/\s+/g, ' ').trim();
-  vttOutput.textContent = clean.length > MAX_TRANSCRIPT_DISPLAY
+  const displayText = clean.length > MAX_TRANSCRIPT_DISPLAY
     ? `...${clean.slice(-MAX_TRANSCRIPT_DISPLAY)}`
     : clean;
+
+  if (vttOutput) vttOutput.textContent = displayText;
+
+  if (composerInput && micToggle?.dataset.running === '1') {
+    composerInput.value = displayText;
+  }
 }
 
 micToggle.addEventListener('click', async () => {
   window.__chat?.unlockAudio?.();
   if (micToggle.dataset.running === '1') {
-    micToggle.dataset.running = '0';
-    micToggle.innerHTML = '<i data-lucide="mic"></i> Voice Input';
-    renderIcons();
-    micToggle.classList.remove('active');
+    setMicButtonState(false);
     stopMic();
   } else {
-    micToggle.dataset.running = '1';
-    micToggle.innerHTML = '<i data-lucide="square"></i> Listening';
-    renderIcons();
-    micToggle.classList.add('active');
+    setMicButtonState(true);
     try {
       await startMic();
     } catch (e) {
       console.error(e);
-      micToggle.dataset.running = '0';
-      micToggle.innerHTML = '<i data-lucide="mic"></i> Voice Input';
-      renderIcons();
-      micToggle.classList.remove('active');
+      setMicButtonState(false);
     }
   }
 });

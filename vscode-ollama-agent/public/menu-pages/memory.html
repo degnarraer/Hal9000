@@ -1,0 +1,47 @@
+<section class="panel-view memory-manager">
+  <div class="monitor-toolbar">
+    <h3>Memory Manager</h3>
+    <button id="refreshMemory" type="button">
+      <i data-lucide="refresh-cw"></i>
+      Refresh
+    </button>
+  </div>
+
+  <div id="memoryStatus" class="model-status"></div>
+
+  <div class="memory-summary-grid">
+    <section class="monitor-card memory-summary-card" data-memory-scope="short">
+      <div class="memory-card-header">
+        <h4>Short Term</h4>
+      </div>
+      <p id="memorySummaryShort" class="memory-summary-text">Loading...</p>
+      <small id="memoryMetaShort"></small>
+    </section>
+
+    <section class="monitor-card memory-summary-card" data-memory-scope="medium">
+      <div class="memory-card-header">
+        <h4>Medium Term</h4>
+      </div>
+      <p id="memorySummaryMedium" class="memory-summary-text">Loading...</p>
+      <small id="memoryMetaMedium"></small>
+    </section>
+
+    <section class="monitor-card memory-summary-card wide" data-memory-scope="long">
+      <div class="memory-card-header">
+        <h4>Long Term</h4>
+      </div>
+      <p id="memorySummaryLong" class="memory-summary-text">Loading...</p>
+      <small id="memoryMetaLong"></small>
+    </section>
+  </div>
+
+  <section class="monitor-card memory-factoid-card">
+    <h4>User Factoids</h4>
+    <div id="memoryFactoids" class="memory-factoid-list">Loading...</div>
+  </section>
+
+  <section class="monitor-card memory-chat-card">
+    <h4>Chat Memory</h4>
+    <div id="memoryMessages" class="memory-message-list">Loading...</div>
+  </section>
+</section>

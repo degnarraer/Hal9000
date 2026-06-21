@@ -1,9 +1,14 @@
-// menu.js - side menu navigation with modular main-page partials.
-const menuBtn = document.createElement('button');
+﻿// menu.js - side menu navigation with modular main-page partials.
+const menuBtn = document.getElementById('fabMenu') || document.createElement('button');
 menuBtn.id = 'fabMenu';
 menuBtn.className = 'fab-menu';
-menuBtn.innerHTML = '<i data-lucide="menu"></i>';
-document.body.appendChild(menuBtn);
+menuBtn.type = 'button';
+menuBtn.setAttribute('aria-label', 'Open menu');
+menuBtn.setAttribute('aria-expanded', 'false');
+menuBtn.setAttribute('title', 'Open menu');
+if (!menuBtn.querySelector('[data-lucide="menu"]')) {
+  menuBtn.innerHTML = '<i data-lucide="menu"></i><span class="menu-glyph" aria-hidden="true">Menu</span>';
+}
 
 const panel = document.createElement('aside');
 panel.id = 'slidePanel';
@@ -21,6 +26,9 @@ panel.innerHTML = `
       <strong id="accountName">Signed in</strong>
       <span id="accountEmail">Loading account...</span>
     </div>
+    <button id="bootstrapAdminBtn" class="panel-icon-btn" type="button" aria-label="Make me admin" title="Make me admin" hidden>
+      <i data-lucide="shield-plus"></i>
+    </button>
     <button id="signOutBtn" class="panel-icon-btn" type="button" aria-label="Sign out" title="Sign out">
       <i data-lucide="log-out"></i>
     </button>
@@ -29,17 +37,51 @@ panel.innerHTML = `
 `;
 document.body.appendChild(panel);
 
-menuBtn.style.cssText = (menuBtn.style.cssText || '') + 'position:fixed;right:24px;bottom:24px;z-index:10000;';
-panel.style.cssText = (panel.style.cssText || '') + 'position:fixed;right:0;top:0;bottom:0;width:360px;z-index:9999;transform:translateX(100%);transition:transform 240ms ease;pointer-events:none;';
+menuBtn.style.cssText = (menuBtn.style.cssText || '') + 'z-index:10000;';
+panel.style.cssText = (panel.style.cssText || '') + 'position:fixed;right:0;top:0;bottom:var(--lower-banner-reserve);width:min(360px, calc(100vw - 16px));z-index:900;transform:translateX(100%);transition:transform 240ms ease;pointer-events:none;';
 
 const main = document.querySelector('.main');
+if (main) {
+  main.appendChild(panel);
+}
 const mainContent = document.getElementById('mainContent');
 const chatContainer = document.querySelector('.chat-container');
+const lowerBanner = document.getElementById('lowerBanner');
+const inputSection = document.querySelector('.input-section');
+const lowerBannerActions = document.getElementById('lowerBannerActions');
+const clearChatBtn = document.getElementById('clearChat');
+const pageBannerStatus = document.getElementById('pageBannerStatus');
+const pageBannerTitle = document.getElementById('pageBannerTitle');
+const pageBannerSubtitle = document.getElementById('pageBannerSubtitle');
 const menuContent = document.getElementById('menuContent');
 const closeBtn = document.getElementById('closePanel');
 const accountName = document.getElementById('accountName');
 const accountEmail = document.getElementById('accountEmail');
+const bootstrapAdminBtn = document.getElementById('bootstrapAdminBtn');
 const signOutBtn = document.getElementById('signOutBtn');
+
+if (lowerBannerActions && menuBtn.parentElement !== lowerBannerActions) {
+  lowerBannerActions.appendChild(menuBtn);
+}
+
+function syncLowerBannerReserve() {
+  if (!lowerBanner) return;
+  const rect = lowerBanner.getBoundingClientRect();
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  const reserve = Math.max(0, Math.ceil(viewportHeight - rect.top));
+  document.documentElement.style.setProperty('--lower-banner-reserve', `${reserve}px`);
+}
+
+if (lowerBanner) {
+  if (window.ResizeObserver) {
+    const lowerBannerObserver = new ResizeObserver(syncLowerBannerReserve);
+    lowerBannerObserver.observe(lowerBanner);
+  }
+  window.addEventListener('resize', syncLowerBannerReserve);
+  window.visualViewport?.addEventListener('resize', syncLowerBannerReserve);
+  window.visualViewport?.addEventListener('scroll', syncLowerBannerReserve);
+  requestAnimationFrame(syncLowerBannerReserve);
+}
 
 const mainPage = document.createElement('section');
 mainPage.id = 'mainMenuPage';
@@ -47,21 +89,99 @@ mainPage.className = 'main-menu-page';
 mainPage.hidden = true;
 mainContent.appendChild(mainPage);
 
+function initSkills() {
+  mainPage.querySelectorAll('[data-skill-route]').forEach(button => {
+    button.addEventListener('click', () => loadMainPage(button.dataset.skillRoute));
+  });
+}
+
+function initAdminMenu() {
+  mainPage.querySelectorAll('[data-admin-route]').forEach(button => {
+    button.addEventListener('click', () => loadMainPage(button.dataset.adminRoute));
+  });
+}
+
 const routes = {
-  models: { title: 'Models', url: '/menu-pages/models.html', init: initModels },
-  monitor: { title: 'Monitor', url: '/menu-pages/monitor.html', init: initMonitor },
-  logging: { title: 'Logging', url: '/menu-pages/logging.html', init: initLogging },
-  remote: { title: 'Remote Control', url: '/menu-pages/remote.html', init: initRemote },
+  skills: { title: 'Skills Menu', url: '/menu-pages/skills.html', init: initSkills },
+  memory: { title: 'Memory', url: '/menu-pages/memory.html', init: initMemory },
+  webSearch: { title: 'Web Search Summary', url: '/menu-pages/web-search.html', init: initWebSearchSkill },
+  admin: { title: 'Admin Menu', url: '/menu-pages/admin.html', init: initAdminMenu, admin: true },
+  models: { title: 'Models', url: '/menu-pages/models.html', init: initModels, admin: true },
+  monitor: { title: 'Monitor', url: '/menu-pages/monitor.html', init: initMonitor, admin: true },
+  logging: { title: 'Logging', url: '/menu-pages/logging.html', init: initLogging, admin: true },
+  activity: { title: 'Activity', url: '/menu-pages/activity.html', init: initActivity, admin: true },
+  security: { title: 'Security', url: '/menu-pages/security.html', init: initSecurity, admin: true },
+  remote: { title: 'Remote Control', url: '/menu-pages/remote.html', init: initRemote, admin: true },
   settings: { title: 'Settings', url: '/menu-pages/settings.html', init: initSettings }
+};
+
+const menuSubmenus = {
+  skills: {
+    title: 'Skills Menu',
+    items: [
+      { route: 'memory', icon: 'brain', title: 'Memory', description: "Review chat memory and HAL's summaries." },
+      { route: 'webSearch', icon: 'search', title: 'Web Search Summary', description: 'Search current web results and summarize them with sources.' }
+    ]
+  },
+  admin: {
+    title: 'Admin Menu',
+    admin: true,
+    items: [
+      { route: 'models', icon: 'boxes', title: 'Models', description: 'Install, remove, and download Ollama models.' },
+      { route: 'monitor', icon: 'activity', title: 'Monitor', description: 'Check the current Ollama server state.' },
+      { route: 'logging', icon: 'logs', title: 'Logging', description: 'Watch recent server activity.' },
+      { route: 'activity', icon: 'chart-line', title: 'Activity', description: 'Track users, actions, and connection rates.' },
+      { route: 'security', icon: 'shield-alert', title: 'Security', description: 'Review auth failures and admin access denials.' },
+      { route: 'remote', icon: 'power', title: 'Remote Control', description: 'Restart the local server process.' }
+    ]
+  }
 };
 
 let currentRoute = 'chat';
 let logSource;
 let monitorTimer;
+let memoryTimer;
+let activityTimer;
+let securityTimer;
+let chartJsPromise;
+let activityCharts = {};
+let securityCharts = {};
+let currentUser = { roles: ['user'], isAdmin: false };
+
+function isAuthRedirect(response) {
+  try {
+    return response.redirected && new URL(response.url, window.location.origin).pathname.startsWith('/auth/');
+  } catch (err) {
+    return false;
+  }
+}
+
+async function fetchWithAuthRedirect(url, options = {}) {
+  const response = await fetch(url, options);
+  if (response.status === 401 || isAuthRedirect(response)) {
+    window.location.href = '/auth/login';
+    throw new Error('Authentication required');
+  }
+  return response;
+}
 
 function renderMenuIcons() {
   window.__icons?.render?.(menuBtn);
   window.__icons?.render?.(panel);
+}
+
+function setLowerBannerRoute(routeName) {
+  const isChat = routeName === 'chat';
+  if (inputSection) inputSection.hidden = !isChat;
+  if (clearChatBtn) clearChatBtn.hidden = !isChat;
+  if (pageBannerStatus) pageBannerStatus.hidden = isChat;
+
+  if (!isChat) {
+    const route = routes[routeName];
+    const title = route?.title || 'Tools';
+    if (pageBannerTitle) pageBannerTitle.textContent = title;
+    if (pageBannerSubtitle) pageBannerSubtitle.textContent = 'Menu stays available from every screen.';
+  }
 }
 
 function setPanelOpen(isOpen) {
@@ -88,16 +208,57 @@ async function fetchAccount() {
   if (!accountName || !accountEmail) return;
 
   try {
-    const response = await fetch('/api/auth/me', { cache: 'no-store' });
+    const response = await fetchWithAuthRedirect('/api/auth/me', { cache: 'no-store' });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     const json = await response.json();
     if (!json.ok) throw new Error(json.error || 'Unable to load account');
     const user = json.data || {};
+    currentUser = user;
     accountName.textContent = user.name || 'Signed in';
-    accountEmail.textContent = user.email || user.subject || 'Authenticated session';
+    accountEmail.textContent = `${user.email || user.subject || 'Authenticated session'}${user.isAdmin ? ' - Admin' : ''}`;
+    await updateBootstrapAdminButton();
+    filterMenuForRole();
   } catch (err) {
+    currentUser = { roles: ['user'], isAdmin: false };
     accountName.textContent = 'Signed in';
     accountEmail.textContent = 'Account unavailable';
+    if (bootstrapAdminBtn) bootstrapAdminBtn.hidden = true;
+  }
+}
+
+async function updateBootstrapAdminButton() {
+  if (!bootstrapAdminBtn) return;
+  bootstrapAdminBtn.hidden = true;
+  if (currentUser.isAdmin) return;
+
+  try {
+    const response = await fetchWithAuthRedirect('/api/admin/bootstrap/status', { cache: 'no-store' });
+    const json = await response.json();
+    bootstrapAdminBtn.hidden = !json.ok || !json.data?.canBootstrap;
+  } catch (err) {
+    bootstrapAdminBtn.hidden = true;
+  }
+  renderMenuIcons();
+}
+
+async function bootstrapAdmin() {
+  const confirmed = await window.__dialog.confirm({
+    title: 'Make Admin',
+    message: 'Make your account an administrator? This is only available before the first admin exists.',
+    confirmText: 'Make Admin'
+  });
+  if (!confirmed) return;
+  bootstrapAdminBtn?.setAttribute('disabled', 'disabled');
+  try {
+    const response = await fetchWithAuthRedirect('/api/admin/bootstrap', { method: 'POST' });
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Admin bootstrap failed');
+    await fetchAccount();
+    loadMenuLanding();
+  } catch (err) {
+    await window.__dialog.alert({ title: 'Admin Bootstrap Failed', message: err.message });
+  } finally {
+    bootstrapAdminBtn?.removeAttribute('disabled');
   }
 }
 
@@ -114,12 +275,21 @@ async function loadMenuLanding() {
   menuContent.innerHTML = '<div class="menu-loading">Loading...</div>';
 
   try {
-    const response = await fetch('/menu-pages/landing.html', { cache: 'no-store' });
+    const response = await fetchWithAuthRedirect('/menu-pages/landing.html', { cache: 'no-store' });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-    menuContent.innerHTML = await response.text();
+    menuContent.innerHTML = `<div class="menu-slide menu-slide-root">${await response.text()}</div>`;
+    filterMenuForRole();
     menuContent.querySelectorAll('[data-menu-route]').forEach(button => {
       button.classList.toggle('active', button.dataset.menuRoute === currentRoute);
-      button.addEventListener('click', () => loadMainPage(button.dataset.menuRoute));
+      button.addEventListener('click', () => {
+        const routeName = button.dataset.menuRoute;
+        if (menuSubmenus[routeName]) {
+          loadMainPage(routeName, { refreshMenu: false });
+          slideToSubmenu(routeName);
+          return;
+        }
+        loadMainPage(routeName);
+      });
     });
     renderMenuIcons();
   } catch (err) {
@@ -127,29 +297,96 @@ async function loadMenuLanding() {
   }
 }
 
-async function loadMainPage(routeName) {
+function slideToSubmenu(submenuName) {
+  const submenu = menuSubmenus[submenuName];
+  if (!submenu || (submenu.admin && !currentUser.isAdmin)) return;
+  const rootHtml = menuContent.querySelector('.menu-slide-root')?.innerHTML || '';
+
+  const childHtml = submenu.items.map(item => `
+    <button class="menu-item" type="button" data-menu-route="${escapeHtml(item.route)}">
+      <i data-lucide="${escapeHtml(item.icon)}"></i>
+      <span>
+        <strong>${escapeHtml(item.title)}</strong>
+        <small>${escapeHtml(item.description)}</small>
+      </span>
+    </button>
+  `).join('');
+
+  menuContent.innerHTML = `
+    <div class="menu-slide-shell">
+      <div class="menu-slide menu-slide-root">${rootHtml}</div>
+      <div class="menu-slide menu-slide-child">
+        <button class="menu-back" type="button" data-menu-back>
+          <i data-lucide="arrow-left"></i>
+          ${escapeHtml(submenu.title)}
+        </button>
+        <section class="menu-landing">${childHtml}</section>
+      </div>
+    </div>
+  `;
+
+  menuContent.querySelector('[data-menu-back]')?.addEventListener('click', loadMenuLanding);
+  menuContent.querySelectorAll('[data-menu-route]').forEach(button => {
+    button.classList.toggle('active', button.dataset.menuRoute === currentRoute);
+    button.addEventListener('click', () => {
+      loadMainPage(button.dataset.menuRoute, { refreshMenu: false });
+      menuContent.querySelectorAll('[data-menu-route]').forEach(item => {
+        item.classList.toggle('active', item === button);
+      });
+    });
+  });
+  renderMenuIcons();
+  requestAnimationFrame(() => {
+    menuContent.querySelector('.menu-slide-shell')?.classList.add('show-child');
+  });
+}
+
+function filterMenuForRole() {
+  if (!menuContent) return;
+  menuContent.querySelectorAll('[data-admin-only="true"]').forEach(element => {
+    element.hidden = !currentUser.isAdmin;
+  });
+}
+
+async function loadMainPage(routeName, options = {}) {
+  const shouldRefreshMenu = options.refreshMenu !== false;
   if (currentRoute === 'monitor' && routeName !== 'monitor') stopMonitorAutoRefresh();
+  if (currentRoute === 'memory' && routeName !== 'memory') stopMemoryAutoRefresh();
+  if (currentRoute === 'activity' && routeName !== 'activity') stopActivityAutoRefresh();
+  if (currentRoute === 'security' && routeName !== 'security') stopSecurityAutoRefresh();
+  if (currentRoute === 'logging' && routeName !== 'logging') stopLogStream();
 
   if (routeName === 'chat') {
     currentRoute = 'chat';
     mainPage.hidden = true;
     mainPage.innerHTML = '';
     chatContainer.hidden = false;
-    loadMenuLanding();
+    setLowerBannerRoute('chat');
+    if (shouldRefreshMenu) loadMenuLanding();
     return;
   }
 
   const route = routes[routeName];
   if (!route) return;
+  if (route.admin && !currentUser.isAdmin) {
+    currentRoute = 'chat';
+    mainPage.hidden = true;
+    mainPage.innerHTML = '';
+    chatContainer.hidden = false;
+    setLowerBannerRoute('chat');
+    setPanelOpen(false);
+    return;
+  }
 
   currentRoute = routeName;
   chatContainer.hidden = true;
   mainPage.hidden = false;
+  setLowerBannerRoute(routeName);
   mainPage.innerHTML = '<div class="menu-loading">Loading...</div>';
-  loadMenuLanding();
+  if (shouldRefreshMenu) loadMenuLanding();
 
   try {
-    const response = await fetch(route.url, { cache: 'no-store' });
+    const response = await fetchWithAuthRedirect(route.url, { cache: 'no-store' });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     mainPage.innerHTML = await response.text();
     window.__icons?.render?.(mainPage);
@@ -159,31 +396,9 @@ async function loadMainPage(routeName) {
   }
 }
 
-function initModels() {
-  byId('installBtn')?.addEventListener('click', installModel);
-  fetchModels();
-  fetchAvailableModels();
-}
-
-function initMonitor() {
-  byId('refreshMonitor')?.addEventListener('click', fetchMonitor);
-  byId('autoRefreshMonitor')?.addEventListener('change', toggleMonitorAutoRefresh);
-  byId('inspectModel')?.addEventListener('click', inspectMonitorModel);
-  byId('loadModel')?.addEventListener('click', loadMonitorModel);
-  byId('unloadModel')?.addEventListener('click', unloadMonitorModel);
-  fetchMonitor();
-}
-
-function initLogging() {
-  byId('refreshLogs')?.addEventListener('click', fetchLogs);
-  fetchLogs();
-}
-
-function initRemote() {
-  byId('softReboot')?.addEventListener('click', softRebootServer);
-}
-
 function initSettings() {
+  byId('fullscreenToggle')?.addEventListener('click', toggleFullscreen);
+  updateFullscreenStatus();
   window.__icons?.render?.(mainPage);
 }
 
@@ -200,338 +415,50 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-async function fetchModels() {
-  const modelsList = byId('modelsList');
-  if (!modelsList) return;
-  modelsList.textContent = 'Loading...';
+async function toggleFullscreen() {
+  const status = byId('fullscreenStatus');
 
   try {
-    const resp = await fetch('/api/ollama/models');
-    const j = await resp.json();
-    if (!j.ok) throw new Error(JSON.stringify(j));
-    renderModels(j.data || []);
-  } catch (e) {
-    modelsList.textContent = 'Error: ' + e.message;
-  }
-}
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      updateFullscreenStatus('Full screen exited.');
+      return;
+    }
 
-function renderModels(items) {
-  const modelsList = byId('modelsList');
-  if (!modelsList) return;
+    const target = document.documentElement;
+    if (target.requestFullscreen) {
+      await target.requestFullscreen({ navigationUI: 'hide' });
+      updateFullscreenStatus('Full screen is active.');
+      return;
+    }
 
-  if (!items || items.length === 0) {
-    modelsList.innerHTML = '<div class="empty">No models installed</div>';
-    return;
-  }
-
-  modelsList.innerHTML = '';
-  items.forEach(it => {
-    const name = (typeof it === 'string') ? it : (it.name || it.model || JSON.stringify(it));
-    const row = document.createElement('div');
-    row.className = 'model-row';
-    row.innerHTML = `
-      <div class="model-name">${escapeHtml(name)}</div>
-      <div class="model-actions">
-        <button class="btn-remove" type="button" data-model="${escapeHtml(name)}">Remove</button>
-      </div>
-    `;
-    modelsList.appendChild(row);
-  });
-
-  modelsList.querySelectorAll('.btn-remove').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const model = btn.dataset.model;
-      if (!confirm('Remove model ' + model + '?')) return;
-      await removeModel(model);
-    });
-  });
-}
-
-async function removeModel(model) {
-  const modelStatus = byId('modelStatus');
-  if (modelStatus) modelStatus.textContent = 'Removing ' + model + '...';
-
-  try {
-    const r = await fetch('/api/ollama/remove', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model })
-    });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    if (modelStatus) modelStatus.textContent = 'Removed ' + model;
-    fetchModels();
-    window.__chat?.loadModels?.();
+    if (status) status.textContent = 'This browser does not support full screen from the page.';
   } catch (err) {
-    if (modelStatus) modelStatus.textContent = 'Error removing: ' + err.message;
+    if (status) status.textContent = 'Full screen was blocked. Try Add to Home Screen for app mode.';
   }
 }
 
-async function installModel() {
-  const modelInput = byId('modelInput');
-  const modelStatus = byId('modelStatus');
-  const model = modelInput?.value.trim();
-  if (!model) return alert('Enter model name');
-  if (modelStatus) modelStatus.textContent = 'Installing ' + model + '...';
+function updateFullscreenStatus(message) {
+  const button = byId('fullscreenToggle');
+  const status = byId('fullscreenStatus');
+  const isFullscreen = Boolean(document.fullscreenElement);
 
-  try {
-    const r = await fetch('/api/ollama/pull', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model })
-    });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    if (modelStatus) modelStatus.textContent = 'Installed ' + model;
-    modelInput.value = '';
-    fetchModels();
-    window.__chat?.loadModels?.();
-  } catch (err) {
-    if (modelStatus) modelStatus.textContent = 'Install error: ' + err.message;
-  }
-}
-
-async function fetchAvailableModels() {
-  const availableList = byId('availableList');
-  if (!availableList) return;
-  availableList.textContent = 'Loading available models...';
-
-  try {
-    const resp = await fetch('/api/ollama/available');
-    const j = await resp.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    renderAvailableModels(j.data || []);
-  } catch (e) {
-    availableList.textContent = 'Error fetching available models: ' + e.message;
-  }
-}
-
-function renderAvailableModels(items) {
-  const availableList = byId('availableList');
-  if (!availableList) return;
-
-  if (!items || items.length === 0) {
-    availableList.innerHTML = '<div class="empty">No models available</div>';
-    return;
+  if (button) {
+    button.innerHTML = isFullscreen
+      ? '<i data-lucide="minimize"></i> Exit full screen'
+      : '<i data-lucide="maximize"></i> Full screen';
   }
 
-  availableList.innerHTML = '';
-  items.forEach(model => {
-    const name = model.name || model;
-    const desc = model.description || model.source || '';
-    const tags = model.tags || ['latest'];
-    const row = document.createElement('div');
-    row.className = 'available-model-row';
-    row.innerHTML = `
-      <div class="model-info">
-        <div class="model-title">${escapeHtml(name)}</div>
-        ${desc ? `<div class="model-desc">${escapeHtml(desc)}</div>` : ''}
-        <div class="model-tags">${tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>
-      </div>
-      <div class="model-actions">
-        <select class="tag-select" data-model="${escapeHtml(name)}">
-          ${tags.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
-        </select>
-        <button class="btn-download" type="button" data-model="${escapeHtml(name)}">Download</button>
-      </div>
-    `;
-    availableList.appendChild(row);
-  });
-
-  availableList.querySelectorAll('.btn-download').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const modelName = btn.dataset.model;
-      const tagSelect = btn.parentElement.querySelector('.tag-select');
-      const tag = tagSelect?.value || 'latest';
-      const fullModel = tag !== 'latest' ? `${modelName}:${tag}` : modelName;
-      if (!confirm(`Download ${fullModel}? This may take a while.`)) return;
-      await downloadModel(fullModel);
-    });
-  });
-}
-
-async function downloadModel(model) {
-  const modelStatus = byId('modelStatus');
-  if (modelStatus) modelStatus.textContent = `Downloading ${model}...`;
-
-  try {
-    const r = await fetch('/api/ollama/pull', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model })
-    });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    if (modelStatus) modelStatus.textContent = `Downloaded ${model}`;
-    fetchModels();
-    fetchAvailableModels();
-    window.__chat?.loadModels?.();
-  } catch (err) {
-    if (modelStatus) modelStatus.textContent = `Download error: ${err.message}`;
-  }
-}
-
-async function fetchMonitor() {
-  const monitorOutput = byId('monitorOutput');
-  const monitorSummary = byId('monitorSummary');
-  const loadedModels = byId('loadedModels');
-  const modelSelect = byId('monitorModelSelect');
-  if (!monitorOutput) return;
-  monitorOutput.textContent = 'Refreshing...';
-  if (monitorSummary) monitorSummary.innerHTML = '';
-  if (loadedModels) loadedModels.textContent = 'Loading...';
-
-  try {
-    const r = await fetch('/api/ollama/monitor/details', { cache: 'no-store' });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    renderMonitor(j.data);
-    populateMonitorModels(modelSelect, j.data.models || []);
-    monitorOutput.textContent = JSON.stringify(j.data, null, 2);
-  } catch (e) {
-    monitorOutput.textContent = 'Error: ' + e.message;
-    if (loadedModels) loadedModels.textContent = 'Error loading monitor data';
-  }
-}
-
-function renderMonitor(data) {
-  const monitorSummary = byId('monitorSummary');
-  const loadedModels = byId('loadedModels');
-  if (!monitorSummary || !loadedModels) return;
-
-  const running = data.running || [];
-  const models = data.models || [];
-  const version = data.version?.version || 'unknown';
-
-  monitorSummary.innerHTML = `
-    <div class="metric"><span>Service</span><strong>${escapeHtml(data.url || 'unknown')}</strong></div>
-    <div class="metric"><span>Version</span><strong>${escapeHtml(version)}</strong></div>
-    <div class="metric"><span>Installed</span><strong>${models.length}</strong></div>
-    <div class="metric"><span>Loaded</span><strong>${running.length}</strong></div>
-  `;
-
-  if (running.length === 0) {
-    loadedModels.innerHTML = '<div class="empty">No models are currently loaded</div>';
-    return;
+  if (status) {
+    status.textContent = message || (isFullscreen
+      ? 'Full screen is active.'
+      : 'For the most app-like mobile mode, use this or Add to Home Screen.');
   }
 
-  loadedModels.innerHTML = '';
-  running.forEach(model => {
-    const name = model.name || model.model || 'unknown';
-    const size = formatBytes(model.size || model.size_vram || 0);
-    const expiresAt = model.expires_at ? new Date(model.expires_at).toLocaleTimeString() : 'not reported';
-    const row = document.createElement('div');
-    row.className = 'monitor-model-row';
-    row.innerHTML = `
-      <div>
-        <strong>${escapeHtml(name)}</strong>
-        <small>VRAM ${escapeHtml(size)} - expires ${escapeHtml(expiresAt)}</small>
-      </div>
-      <button type="button" data-monitor-unload="${escapeHtml(name)}">Unload</button>
-    `;
-    loadedModels.appendChild(row);
-  });
-
-  loadedModels.querySelectorAll('[data-monitor-unload]').forEach(button => {
-    button.addEventListener('click', () => unloadMonitorModel(button.dataset.monitorUnload));
-  });
+  window.__icons?.render?.(mainPage);
 }
 
-function populateMonitorModels(modelSelect, models) {
-  if (!modelSelect) return;
-  const selected = modelSelect.value || localStorage.getItem('selectedModel') || '';
-  modelSelect.innerHTML = '';
-
-  models.forEach(model => {
-    const name = typeof model === 'string' ? model : (model.name || model.model || '');
-    if (!name) return;
-    const option = document.createElement('option');
-    option.value = name;
-    option.textContent = name;
-    modelSelect.appendChild(option);
-  });
-
-  if (selected && Array.from(modelSelect.options).some(option => option.value === selected)) {
-    modelSelect.value = selected;
-  }
-}
-
-async function inspectMonitorModel() {
-  const model = byId('monitorModelSelect')?.value;
-  const details = byId('modelDetails');
-  if (!model || !details) return;
-  details.textContent = `Inspecting ${model}...`;
-
-  try {
-    const r = await fetch('/api/ollama/show', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model })
-    });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    details.textContent = JSON.stringify(j.data, null, 2);
-  } catch (err) {
-    details.textContent = 'Inspect error: ' + err.message;
-  }
-}
-
-async function loadMonitorModel() {
-  const model = byId('monitorModelSelect')?.value;
-  const keepAlive = byId('keepAliveSelect')?.value || '5m';
-  const details = byId('modelDetails');
-  if (!model) return;
-  if (details) details.textContent = `Loading ${model}...`;
-
-  try {
-    const r = await fetch('/api/ollama/load', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, keepAlive })
-    });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    if (details) details.textContent = `Loaded ${model} with keep_alive ${keepAlive}`;
-    fetchMonitor();
-  } catch (err) {
-    if (details) details.textContent = 'Load error: ' + err.message;
-  }
-}
-
-async function unloadMonitorModel(modelOverride) {
-  const model = modelOverride || byId('monitorModelSelect')?.value;
-  const details = byId('modelDetails');
-  if (!model) return;
-  if (details) details.textContent = `Unloading ${model}...`;
-
-  try {
-    const r = await fetch('/api/ollama/unload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model })
-    });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    if (details) details.textContent = `Unloaded ${model}`;
-    fetchMonitor();
-  } catch (err) {
-    if (details) details.textContent = 'Unload error: ' + err.message;
-  }
-}
-
-function toggleMonitorAutoRefresh(event) {
-  stopMonitorAutoRefresh();
-
-  if (event.target.checked) {
-    monitorTimer = setInterval(fetchMonitor, 3000);
-  }
-}
-
-function stopMonitorAutoRefresh() {
-  if (!monitorTimer) return;
-  clearInterval(monitorTimer);
-  monitorTimer = null;
-}
+document.addEventListener('fullscreenchange', () => updateFullscreenStatus());
 
 function formatBytes(bytes) {
   const value = Number(bytes);
@@ -546,102 +473,37 @@ function formatBytes(bytes) {
   return `${size.toFixed(size >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
-async function fetchLogs() {
-  const logsList = byId('logsList');
-  if (!logsList) return;
-  logsList.textContent = 'Loading...';
-
-  try {
-    const r = await fetch('/api/logs');
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    renderLogs(j.data || []);
-    startLogStream();
-  } catch (e) {
-    logsList.textContent = 'Error: ' + e.message;
-  }
+function formatRate(bytesPerSecond) {
+  return `${formatBytes(bytesPerSecond)}/s`;
 }
 
-function renderLogs(items) {
-  const logsList = byId('logsList');
-  if (!logsList) return;
-
-  if (!items || items.length === 0) {
-    logsList.innerHTML = '<div class="empty">No logs</div>';
-    return;
-  }
-
-  logsList.innerHTML = '';
-  items.forEach(prependLog);
+function formatTime(value) {
+  if (!value) return 'unknown';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'unknown';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-function startLogStream() {
-  if (logSource) return;
-  logSource = new EventSource('/api/logs/stream');
-  logSource.onmessage = (e) => {
-    try { prependLog(JSON.parse(e.data)); } catch (err) { console.warn(err); }
-  };
-}
-
-function prependLog(entry) {
-  const logsList = byId('logsList');
-  if (!logsList) return;
-
-  const row = document.createElement('div');
-  row.className = 'log-row';
-  row.textContent = `[${entry.ts}] ${String(entry.level).toUpperCase()} ${entry.msg}`;
-  logsList.insertBefore(row, logsList.firstChild);
-}
-
-async function softRebootServer() {
-  const softReboot = byId('softReboot');
-  const rebootStatus = byId('rebootStatus');
-  if (!confirm('Send soft reboot to server? This will disconnect you briefly.')) return;
-  if (rebootStatus) rebootStatus.textContent = 'Sending reboot command...';
-  if (softReboot) softReboot.disabled = true;
-
-  try {
-    const r = await fetch('/api/control/reboot', { method: 'POST' });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    if (rebootStatus) rebootStatus.textContent = 'Reboot command sent. Server restarting...';
-    waitForServer(rebootStatus, softReboot);
-  } catch (e) {
-    if (rebootStatus) rebootStatus.textContent = 'Error: ' + e.message;
-    if (softReboot) softReboot.disabled = false;
-  }
-}
-
-function waitForServer(rebootStatus, softReboot) {
-  let attempts = 0;
-  const maxAttempts = 30;
-  const checkConnection = setInterval(async () => {
-    attempts++;
-    try {
-      const health = await fetch('/api/ollama/available', { signal: AbortSignal.timeout(2000) });
-      if (health.ok) {
-        clearInterval(checkConnection);
-        if (rebootStatus) rebootStatus.textContent = 'Server is back online. Refreshing...';
-        setTimeout(() => { window.location.reload(); }, 1000);
-      }
-    } catch (e) {
-      if (attempts >= maxAttempts) {
-        clearInterval(checkConnection);
-        if (rebootStatus) rebootStatus.textContent = 'Server reboot took too long. Please refresh manually.';
-        if (softReboot) softReboot.disabled = false;
-      } else if (rebootStatus) {
-        rebootStatus.textContent = `Waiting for server... (${attempts}/${maxAttempts}s)`;
-      }
-    }
-  }, 1000);
+function capitalize(value) {
+  return String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1);
 }
 
 menuBtn.addEventListener('click', () => {
   setPanelOpen(!panel.classList.contains('open'));
 });
 closeBtn.addEventListener('click', () => setPanelOpen(false));
+document.addEventListener('pointerdown', event => {
+  if (!panel.classList.contains('open')) return;
+  if (panel.contains(event.target) || menuBtn.contains(event.target)) return;
+  setPanelOpen(false);
+});
+window.addEventListener('hal:memory-changed', () => {
+  if (currentRoute === 'memory') fetchMemoryManager({ silent: true });
+});
+bootstrapAdminBtn?.addEventListener('click', bootstrapAdmin);
 signOutBtn?.addEventListener('click', signOut);
 
+setLowerBannerRoute('chat');
 loadMenuLanding();
 renderMenuIcons();
 fetchAccount();
