@@ -1,8 +1,48 @@
 ﻿// Extracted from menu.js. Loaded after public/menu.js.
 function initModels() {
   byId('installBtn')?.addEventListener('click', installModel);
+  byId('saveOllamaConfig')?.addEventListener('click', saveOllamaConfig);
+  fetchOllamaConfig();
   fetchModels();
   fetchAvailableModels();
+}
+
+async function fetchOllamaConfig() {
+  const keepAlive = byId('ollamaKeepAlive');
+  const status = byId('ollamaConfigStatus');
+  if (!keepAlive) return;
+  if (status) status.textContent = 'Loading Ollama config...';
+
+  try {
+    const resp = await fetch('/api/ollama/config', { cache: 'no-store' });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error || JSON.stringify(json));
+    keepAlive.value = json.data?.keepAlive || '5m';
+    if (status) {
+      status.textContent = `Ollama ${json.data?.url || 'URL unknown'} - default chat model ${json.data?.defaultModel || 'unknown'}`;
+    }
+  } catch (err) {
+    if (status) status.textContent = 'Config error: ' + err.message;
+  }
+}
+
+async function saveOllamaConfig() {
+  const keepAlive = byId('ollamaKeepAlive')?.value || '5m';
+  const status = byId('ollamaConfigStatus');
+  if (status) status.textContent = 'Saving Ollama config...';
+
+  try {
+    const resp = await fetch('/api/ollama/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keepAlive })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error || JSON.stringify(json));
+    if (status) status.textContent = `Saved. Chat requests now use keep_alive ${json.data.keepAlive}.`;
+  } catch (err) {
+    if (status) status.textContent = 'Save error: ' + err.message;
+  }
 }
 
 async function fetchModels() {

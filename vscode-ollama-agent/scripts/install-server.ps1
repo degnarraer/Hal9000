@@ -7,6 +7,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$script:PathChanged = $false
+$script:PackagesInstalled = $false
 
 if ($Full) {
   $InstallWsl = $true
@@ -43,6 +45,7 @@ function Add-PathEntry {
   $currentEntries = $env:Path -split ';' | Where-Object { $_ }
   if ($currentEntries -notcontains $PathEntry) {
     $env:Path = "$PathEntry;$env:Path"
+    $script:PathChanged = $true
     Write-Host "[path] Added to current session: $PathEntry"
   }
 
@@ -58,6 +61,7 @@ function Add-PathEntry {
   }
 
   [Environment]::SetEnvironmentVariable('Path', "$existing;$PathEntry", $target)
+  $script:PathChanged = $true
   Write-Host "[path] Persisted to $target PATH: $PathEntry"
 }
 
@@ -77,7 +81,8 @@ function Repair-KnownPaths {
     "$env:ProgramFiles\nodejs",
     "$env:ProgramFiles\Docker\Docker\resources\bin",
     "$env:LOCALAPPDATA\Programs\Ollama",
-    "$env:LOCALAPPDATA\Microsoft\WindowsApps"
+    "$env:LOCALAPPDATA\Microsoft\WindowsApps",
+    "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Bitwarden.CLI_Microsoft.Winget.Source_8wekyb3d8bbwe"
   )
 
   foreach ($entry in $paths) {
@@ -105,6 +110,7 @@ function Ensure-WingetPackage {
   Test-Winget
   Write-Host "[install] $DisplayName via winget"
   winget install --id $PackageId --exact --accept-source-agreements --accept-package-agreements
+  $script:PackagesInstalled = $true
 }
 
 function Ensure-DockerCompose {
@@ -155,6 +161,7 @@ function Ensure-Wsl {
 
   Write-Host "[install] Installing WSL. A reboot may be required."
   & wsl.exe --install
+  $script:PackagesInstalled = $true
 }
 
 function Test-WindowsFeatureState {
@@ -224,6 +231,12 @@ function Show-NextSteps {
   Write-Host "4. Run: npm run docker:start"
   Write-Host "5. Run: npm run docker:config"
   Write-Host "6. Run: npm run docker:up"
+
+  if ($script:PathChanged -or $script:PackagesInstalled) {
+    Write-Host ""
+    Write-Host "Important: restart VS Code before using newly installed command-line tools from Run/Debug tasks." -ForegroundColor Yellow
+    Write-Host "Existing VS Code terminals do not automatically receive Windows PATH changes." -ForegroundColor Yellow
+  }
 }
 
 Repair-KnownPaths -Persist:$PersistPath
@@ -232,6 +245,7 @@ Write-Step "Checking server prerequisites"
 Ensure-WingetPackage -Command git -PackageId Git.Git -DisplayName "Git"
 Ensure-WingetPackage -Command node -PackageId OpenJS.NodeJS.LTS -DisplayName "Node.js LTS"
 Ensure-WingetPackage -Command docker -PackageId Docker.DockerDesktop -DisplayName "Docker Desktop"
+Ensure-WingetPackage -Command bw -PackageId Bitwarden.CLI -DisplayName "Bitwarden CLI"
 
 if ($InstallOllama) {
   Ensure-WingetPackage -Command ollama -PackageId Ollama.Ollama -DisplayName "Ollama"

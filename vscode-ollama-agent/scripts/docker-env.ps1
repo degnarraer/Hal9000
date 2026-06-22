@@ -60,6 +60,9 @@ if ($Environment -eq 'prod') {
   $realm = $realm.Replace('__OIDC_CLIENT_SECRET__', $envValues['OIDC_CLIENT_SECRET'])
   $realm = $realm.Replace('__OIDC_REDIRECT_URI__', $envValues['OIDC_REDIRECT_URI'])
   $realm = $realm.Replace('__APP_ORIGIN__', $appOrigin)
+  $realm = $realm.Replace('__VAULTWARDEN_SSO_CLIENT_SECRET__', $envValues['VAULTWARDEN_SSO_CLIENT_SECRET'])
+  $realm = $realm.Replace('__VAULTWARDEN_REDIRECT_URI__', "$($envValues['VAULT_SITE'])/identity/connect/oidc-signin")
+  $realm = $realm.Replace('__VAULT_ORIGIN__', $envValues['VAULT_SITE'])
   Set-Content -Path $generatedRealm -Value $realm -Encoding UTF8
 
   $env:KEYCLOAK_REALM_IMPORT = $generatedRealm

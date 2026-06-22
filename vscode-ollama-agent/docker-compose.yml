@@ -80,8 +80,10 @@ services:
       OIDC_ISSUER: ${OIDC_ISSUER:-http://auth.localhost/realms/ollama-agent}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-ollama-agent}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-change-me-before-production}
+      USER_KEY_SECRET: ${USER_KEY_SECRET:-}
       OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://app.localhost/auth/callback}
       OIDC_REGISTRATION_ENDPOINT: ${OIDC_REGISTRATION_ENDPOINT:-}
+      VAULT_SITE: ${VAULT_SITE:-http://vault.localhost}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me-before-production}
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-change-me-before-production}
       MEMORY_ENABLED: ${MEMORY_ENABLED:-true}
@@ -162,6 +164,13 @@ services:
       SIGNUPS_ALLOWED: ${VAULTWARDEN_SIGNUPS_ALLOWED:-false}
       INVITATIONS_ALLOWED: ${VAULTWARDEN_INVITATIONS_ALLOWED:-true}
       ADMIN_TOKEN: ${VAULTWARDEN_ADMIN_TOKEN:-change-me-before-production}
+      SSO_ENABLED: ${VAULTWARDEN_SSO_ENABLED:-false}
+      SSO_ONLY: ${VAULTWARDEN_SSO_ONLY:-false}
+      SSO_AUTHORITY: ${VAULTWARDEN_SSO_AUTHORITY:-}
+      SSO_SCOPES: ${VAULTWARDEN_SSO_SCOPES:-openid profile email offline_access}
+      SSO_CLIENT_ID: ${VAULTWARDEN_SSO_CLIENT_ID:-vaultwarden}
+      SSO_CLIENT_SECRET: ${VAULTWARDEN_SSO_CLIENT_SECRET:-}
+      SSO_SIGNUPS_MATCH_EMAIL: ${VAULTWARDEN_SSO_SIGNUPS_MATCH_EMAIL:-true}
       WEBSOCKET_ENABLED: "true"
     volumes:
       - vaultwarden_data:/data

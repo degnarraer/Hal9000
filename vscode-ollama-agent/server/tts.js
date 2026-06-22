@@ -3,8 +3,8 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const DEFAULT_TTS_PROVIDER = 'google';
-const SUPPORTED_TTS_PROVIDERS = new Set(['google', 'piper', 'windows']);
+const DEFAULT_TTS_PROVIDER = 'piper';
+const SUPPORTED_TTS_PROVIDERS = new Set(['piper']);
 
 function getTtsProvider(env = process.env) {
   const provider = String(env.TTS_PROVIDER || DEFAULT_TTS_PROVIDER).trim().toLowerCase();
@@ -52,7 +52,7 @@ function splitTextForTts(text, maxLength = 200) {
 
 function piperArgsForOutput(outPath, env = process.env) {
   const model = env.TTS_PIPER_MODEL || env.PIPER_MODEL;
-  if (!model) throw new Error('TTS_PIPER_MODEL is required when TTS_PROVIDER=piper');
+  if (!model) throw new Error('TTS_PIPER_MODEL is required for text-to-speech');
 
   const args = ['--model', model, '--output_file', outPath];
   const config = env.TTS_PIPER_CONFIG || env.PIPER_CONFIG;
@@ -65,6 +65,71 @@ function piperArgsForOutput(outPath, env = process.env) {
   if (env.TTS_PIPER_NOISE_W) args.push('--noise_w', env.TTS_PIPER_NOISE_W);
 
   return args;
+}
+
+function getPiperConfigPath(env = process.env) {
+  const explicitConfig = env.TTS_PIPER_CONFIG || env.PIPER_CONFIG;
+  if (explicitConfig) return explicitConfig;
+
+  const model = env.TTS_PIPER_MODEL || env.PIPER_MODEL;
+  return model ? `${model}.json` : '';
+}
+
+function getPiperRuntimeStatus(env = process.env) {
+  const model = env.TTS_PIPER_MODEL || env.PIPER_MODEL || '';
+  const config = getPiperConfigPath(env);
+  const bin = env.TTS_PIPER_BIN || env.PIPER_BIN || 'piper';
+  return {
+    provider: 'piper',
+    bin,
+    hasModel: Boolean(model),
+    hasConfig: Boolean(config),
+    configLoaded: Boolean(config && fs.existsSync(config))
+  };
+}
+
+function readPiperConfig(env = process.env) {
+  const configPath = getPiperConfigPath(env);
+  if (!configPath || !fs.existsSync(configPath)) return null;
+  return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+}
+
+function piperSpeakerOptionsFromConfig(config) {
+  const speakerIdMap = config?.speaker_id_map;
+  if (speakerIdMap && typeof speakerIdMap === 'object') {
+    return Object.entries(speakerIdMap)
+      .map(([label, value]) => ({ label, value: String(value) }))
+      .sort((a, b) => Number(a.value) - Number(b.value) || a.label.localeCompare(b.label));
+  }
+
+  const count = Number(config?.num_speakers || config?.audio?.num_speakers || 0);
+  if (!Number.isFinite(count) || count <= 1) return [];
+  return Array.from({ length: count }, (_, index) => ({ label: `Speaker ${index}`, value: String(index) }));
+}
+
+function getPiperConfigDetails(env = process.env) {
+  try {
+    const configPath = getPiperConfigPath(env);
+    const config = readPiperConfig(env);
+    return {
+      path: configPath,
+      loaded: Boolean(config),
+      speakers: piperSpeakerOptionsFromConfig(config),
+      lengthScale: ['0.75', '0.85', '0.9', '1', '1.05', '1.1', '1.2', '1.35'],
+      noiseScale: ['0.35', '0.45', '0.55', '0.667', '0.75', '0.85', '1'],
+      noiseW: ['0.4', '0.6', '0.8', '1', '1.2']
+    };
+  } catch (err) {
+    return {
+      path: getPiperConfigPath(env),
+      loaded: false,
+      error: err?.message || String(err),
+      speakers: [],
+      lengthScale: ['0.75', '0.85', '0.9', '1', '1.05', '1.1', '1.2', '1.35'],
+      noiseScale: ['0.35', '0.45', '0.55', '0.667', '0.75', '0.85', '1'],
+      noiseW: ['0.4', '0.6', '0.8', '1', '1.2']
+    };
+  }
 }
 
 function buildPiperEnv(overrides = {}, env = process.env) {
@@ -137,6 +202,8 @@ async function synthesizePiperSpeech(text, env = process.env) {
 module.exports = {
   getTtsProvider,
   getSupportedTtsProviders,
+  getPiperConfigDetails,
+  getPiperRuntimeStatus,
   resolveTtsProvider,
   buildPiperEnv,
   piperArgsForOutput,

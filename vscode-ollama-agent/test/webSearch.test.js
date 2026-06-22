@@ -45,5 +45,9 @@ test('buildWebSummaryPrompt includes source links for ollama summarization', () 
   ]);
 
   assert.match(prompt, /Use only the sources below/);
+  assert.match(prompt, /Skill input contract/);
+  assert.match(prompt, /"contractVersion":1/);
+  assert.match(prompt, /"skill":"web-search"/);
+  assert.match(prompt, /"output":\{"response":"text shown to the user"/);
   assert.match(prompt, /https:\/\/example\.com/);
 });

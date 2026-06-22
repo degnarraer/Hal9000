@@ -79,6 +79,15 @@ async function searchWeb(query, options = {}) {
 }
 
 function buildWebSummaryPrompt(userPrompt, query, results) {
+  const inputContract = {
+    contractVersion: 1,
+    skill: 'web-search',
+    input: {
+      prompt: userPrompt,
+      context: { query, results },
+      upstream: []
+    }
+  };
   const sourceLines = results.map((item, index) => [
     `[${index + 1}] ${item.title}`,
     `URL: ${item.url}`,
@@ -87,12 +96,17 @@ function buildWebSummaryPrompt(userPrompt, query, results) {
 
   return [
     'You are Bob using a web search skill.',
-    'Summarize the search results for the user in a concise, helpful answer.',
-    'Use only the sources below. If the sources are thin or conflicting, say so.',
-    'Include a short "Sources" section with numbered links.',
+    'Skill input contract:',
+    JSON.stringify(inputContract),
     '',
-    `User request: ${userPrompt}`,
-    `Search query: ${query}`,
+    'Return only valid minified JSON using this output contract shape:',
+    '{"contractVersion":1,"skill":"web-search","output":{"response":"text shown to the user","metadata":{"emotion":"focused"},"data":{"query":"search query"},"sources":[{"title":"source title","url":"https://source","snippet":"short snippet"}]}}',
+    'The output.response field must summarize the search results for the user in a concise, helpful answer.',
+    'The output.metadata.emotion field must describe Bob\'s emotional state.',
+    'The output.data.query field must match the search query.',
+    'The output.sources array must include the sources used.',
+    'Use only the sources below. If the sources are thin or conflicting, say so.',
+    'Do not include markdown fences or any text outside the JSON object.',
     '',
     '<search_results>',
     sourceLines || '(No results found.)',

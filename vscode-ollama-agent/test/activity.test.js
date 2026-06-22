@@ -1,11 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { chunkBytes, isTrackableUser, routeLabel, userKey } = require('../server/activity');
+const { chunkBytes, isTrackableUser, routeLabel } = require('../server/activity');
+const { databaseUserKey } = require('../server/userIdentity');
 
 test('isTrackableUser filters security pseudo-users', () => {
-  assert.equal(isTrackableUser({ name: 'public-asset' }), false);
-  assert.equal(isTrackableUser({ name: 'auth-login' }), false);
-  assert.equal(isTrackableUser({ email: 'degnarraer@yahoo.com' }), true);
+  assert.equal(isTrackableUser({ systemKey: 'public-asset', name: 'public-asset' }), false);
+  assert.equal(isTrackableUser({ systemKey: 'auth-login', name: 'auth-login' }), false);
+  assert.equal(isTrackableUser({ email: 'person@example.com' }), false);
+  assert.equal(isTrackableUser({ sub: 'subject-123', email: 'person@example.com' }), true);
 });
 
 test('routeLabel gives readable activity names for key dashboard routes', () => {
@@ -21,6 +23,8 @@ test('chunkBytes safely counts response chunks', () => {
   assert.equal(chunkBytes(() => {}), 0);
 });
 
-test('activity userKey matches OIDC subject preference', () => {
-  assert.equal(userKey({ sub: 'subject-123', email: 'person@example.com' }), 'subject-123');
+test('activity userKey derives an opaque key from OIDC subject', () => {
+  const key = databaseUserKey({ sub: 'subject-123', email: 'person@example.com' });
+  assert.notEqual(key, 'subject-123');
+  assert.throws(() => databaseUserKey({ email: 'person@example.com' }), /subject is required/);
 });

@@ -6,11 +6,13 @@ function secret(bytes = 32) {
 
 const values = {
   OIDC_CLIENT_SECRET: secret(32),
+  USER_KEY_SECRET: secret(32),
   KEYCLOAK_ADMIN_PASSWORD: secret(24),
   KEYCLOAK_DB_PASSWORD: secret(24),
   MEMORY_DB_PASSWORD: secret(24),
   ADMIN_BOOTSTRAP_TOKEN: secret(32),
-  VAULTWARDEN_ADMIN_TOKEN: secret(48)
+  VAULTWARDEN_ADMIN_TOKEN: secret(48),
+  VAULTWARDEN_SSO_CLIENT_SECRET: secret(32)
 };
 
 for (const [key, value] of Object.entries(values)) {

@@ -1,9 +1,14 @@
 ﻿// Extracted from menu.js. Loaded after public/menu.js.
 function initMemory() {
   byId('refreshMemory')?.addEventListener('click', fetchMemoryManager);
+  byId('memoryRequirements')?.addEventListener('click', () => window.__menu?.load?.('memoryRequirements'));
   byId('wipeMemory')?.addEventListener('click', wipeMemory);
   fetchMemoryManager();
   startMemoryAutoRefresh();
+}
+
+function initMemoryRequirements() {
+  byId('backToMemory')?.addEventListener('click', () => window.__menu?.load?.('memory'));
 }
 
 async function fetchMemoryManager({ silent = false } = {}) {

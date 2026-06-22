@@ -4,20 +4,24 @@ const path = require('path');
 const cors = require('cors');
 const axios = require('axios');
 const fs = require('fs');
-const os = require('os');
-const gtts = require('google-tts-api');
 const { exec, spawn } = require('child_process');
 const Logger = require('./logger');
 const { getAvailableModels, formatModelRef } = require('./ollamaModels');
 const { createSecurityMiddleware } = require('./security');
 const { createMemoryStore } = require('./memory');
+const { createMemorySkillService, estimateTokens, isContextPressureHigh } = require('./memorySkill');
 const { createAdminStore } = require('./admin');
 const { createActivityMonitor } = require('./activity');
 const { createSecurityEventStore } = require('./securityEvents');
 const { createYahooStore } = require('./yahoo');
 const { createUserChatStore } = require('./userChat');
+const { createOllamaConfigStore } = require('./ollamaConfig');
+const { buildBobChatSkillInstructions } = require('./bobChatSkill');
 const { shouldSearchWeb, extractSearchQuery, searchWeb, buildWebSummaryPrompt } = require('./webSearch');
-const { getTtsProvider, getSupportedTtsProviders, resolveTtsProvider, buildPiperEnv, splitTextForTts, synthesizePiperSpeech } = require('./tts');
+const { buildSkillInputContract, parseBobChatContract, parseSkillOutputContract } = require('./bobSkillContracts');
+const { getTtsProvider, getSupportedTtsProviders, getPiperConfigDetails, getPiperRuntimeStatus, resolveTtsProvider, buildPiperEnv, splitTextForTts, synthesizePiperSpeech } = require('./tts');
+const { createTtsSettingsStore } = require('./ttsSettings');
+const { requestDatabaseUserKey } = require('./userIdentity');
 
 const app = express();
 
@@ -29,13 +33,23 @@ const MEMORY_SUMMARY_INTERVALS = {
   medium: Number(process.env.MEMORY_MEDIUM_SUMMARY_INTERVAL || 20),
   long: Number(process.env.MEMORY_LONG_SUMMARY_INTERVAL || 60)
 };
+const MEMORY_BUDGET = {
+  modelContextTokens: Number(process.env.MEMORY_MODEL_CONTEXT_TOKENS || process.env.OLLAMA_MODEL_CONTEXT_TOKENS || 4096),
+  triggerRatio: Number(process.env.MEMORY_CONTEXT_TRIGGER_RATIO || 0.72),
+  promptReserveTokens: Number(process.env.MEMORY_PROMPT_RESERVE_TOKENS || 1200),
+  maxWords: {
+    short: Number(process.env.MEMORY_SHORT_MAX_WORDS || 120),
+    medium: Number(process.env.MEMORY_MEDIUM_MAX_WORDS || 250),
+    long: Number(process.env.MEMORY_LONG_MAX_WORDS || 400)
+  }
+};
 // Support custom OLLAMA_BIN path (useful on Windows where ollama may not be on PATH)
 const OLLAMA_BIN = process.env.OLLAMA_BIN || 'ollama';
 const DEPLOYMENT_ENV = process.env.DEPLOYMENT_ENV || process.env.NODE_ENV || 'development';
-const TTS_PROVIDER = getTtsProvider();
 
 // instantiate logger early so top-level functions (loadRules, routes) can use it without causing a TDZ
 const logger = new Logger({ bufferSize: 2000 });
+const ttsSettings = createTtsSettingsStore(logger);
 const securityEvents = createSecurityEventStore(logger);
 const security = createSecurityMiddleware(logger, securityEvents);
 const memory = createMemoryStore(logger);
@@ -43,6 +57,8 @@ const admin = createAdminStore(logger, securityEvents);
 const activity = createActivityMonitor(logger);
 const yahoo = createYahooStore(logger);
 const userChat = createUserChatStore(logger);
+const ollamaConfig = createOllamaConfigStore(logger);
+const bobContextUsage = new Map();
 
 function validateProductionConfig() {
   if (DEPLOYMENT_ENV !== 'production') return;
@@ -133,6 +149,7 @@ app.get('/', (req, res) => {
       .replace(/(\/app\.js)(["'])/g, `$1?v=${v}$2`)
       .replace(/(\/style\.css)(["'])/g, `$1?v=${v}$2`)
       .replace(/(\/bob-expression-engine\.js)(["'])/g, `$1?v=${v}$2`)
+      .replace(/(\/voice-preferences\.js)(["'])/g, `$1?v=${v}$2`)
       .replace(/(\/mic\.js)(["'])/g, `$1?v=${v}$2`)
       .replace(/(\/menu\/[^"']+\.js)(["'])/g, `$1?v=${v}$2`)
       .replace(/(\/menu\.js)(["'])/g, `$1?v=${v}$2`);
@@ -154,136 +171,41 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
 app.use('/vendor/lucide', express.static(path.join(__dirname, '..', 'node_modules', 'lucide', 'dist', 'umd')));
 app.use('/vendor/chart.js', express.static(path.join(__dirname, '..', 'node_modules', 'chart.js', 'dist')));
 
-function buildTtsOptions(lang) {
-  return {
-    lang,
-    slow: false,
-    host: 'https://translate.google.com',
-  };
+async function synthesizeConfiguredSpeech(text, lang, provider = ttsSettings.current().provider, options = {}) {
+  return synthesizePiperSpeech(text, buildPiperEnv(options.piper));
 }
 
-function synthesizeLocalSpeech(text, options = {}) {
-  return new Promise((resolve, reject) => {
-    if (process.platform !== 'win32') {
-      reject(new Error('Local speech fallback is only implemented for Windows'));
-      return;
-    }
-
-    const outPath = path.join(os.tmpdir(), `ollama-agent-tts-${Date.now()}-${Math.random().toString(16).slice(2)}.wav`);
-    const textB64 = Buffer.from(text, 'utf8').toString('base64');
-    const command = [
-      'Add-Type -AssemblyName System.Speech;',
-      '$text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:TTS_TEXT_B64));',
-      '$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer;',
-      'if ($env:TTS_WINDOWS_VOICE) { $speaker.SelectVoice($env:TTS_WINDOWS_VOICE); }',
-      '$speaker.Rate = 0;',
-      '$speaker.Volume = 100;',
-      '$speaker.SetOutputToWaveFile($env:TTS_OUT);',
-      '$speaker.Speak($text);',
-      '$speaker.Dispose();'
-    ].join(' ');
-
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
-      windowsHide: true,
-      env: { ...process.env, TTS_TEXT_B64: textB64, TTS_OUT: outPath, TTS_WINDOWS_VOICE: options.voice || '' }
-    });
-
-    let stderr = '';
-    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(stderr || `PowerShell speech exited with ${code}`));
-        return;
-      }
-
-      fs.readFile(outPath, (err, audio) => {
-        fs.unlink(outPath, () => {});
-        if (err) reject(err);
-        else resolve(audio);
-      });
-    });
-  });
-}
-
-function listWindowsSpeechVoices() {
-  return new Promise(resolve => {
-    if (process.platform !== 'win32') {
-      resolve([]);
-      return;
-    }
-
-    const command = [
-      'Add-Type -AssemblyName System.Speech;',
-      '$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer;',
-      '$speaker.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name };',
-      '$speaker.Dispose();'
-    ].join(' ');
-
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
-      windowsHide: true
-    });
-
-    let stdout = '';
-    child.stdout.on('data', chunk => { stdout += chunk.toString(); });
-    child.on('error', () => resolve([]));
-    child.on('close', code => {
-      if (code !== 0) {
-        resolve([]);
-        return;
-      }
-      resolve(stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean));
-    });
-  });
-}
-
-async function synthesizeConfiguredSpeech(text, lang, provider = TTS_PROVIDER, options = {}) {
-  if (provider === 'piper') {
-    return synthesizePiperSpeech(text, buildPiperEnv(options.piper));
-  }
-
-  if (provider === 'windows') {
-    return {
-      audio: await synthesizeLocalSpeech(text, options.windows),
-      contentType: 'audio/wav',
-      provider: 'windows'
-    };
-  }
-
-  return synthesizeGoogleSpeech(text, lang);
-}
-
-async function synthesizeGoogleSpeech(text, lang) {
-  const base64 = await gtts.getAudioBase64(text, buildTtsOptions(lang));
-  return {
-    audio: Buffer.from(base64, 'base64'),
-    contentType: 'audio/mpeg',
-    provider: 'google'
-  };
+function ttsReadinessError(provider) {
+  if (provider !== 'piper') return '';
+  const piper = getPiperRuntimeStatus();
+  if (!piper.hasModel) return 'Piper is not configured. Set TTS_PIPER_MODEL to a Piper .onnx voice model path.';
+  return '';
 }
 
 // TTS endpoint: returns same-origin audio chunks generated through the configured provider.
 app.get('/api/tts', async (req, res) => {
   const text = req.query.text || '';
-  const lang = req.query.lang || 'en';
-  const provider = resolveTtsProvider(req.query.provider, TTS_PROVIDER);
+  const defaults = ttsSettings.current();
+  const lang = req.query.lang || defaults.lang || 'en';
+  const provider = resolveTtsProvider(req.query.provider, defaults.provider);
   const speaker = req.query.speaker || '';
-  const voice = req.query.voice || '';
   const lengthScale = req.query.lengthScale || '';
   const noiseScale = req.query.noiseScale || '';
   const noiseW = req.query.noiseW || '';
   if (!text) return res.status(400).json({ ok: false, error: 'text required' });
+  const readinessError = ttsReadinessError(provider);
+  if (readinessError) return res.status(503).json({ ok: false, error: readinessError });
   try {
     const chunks = splitTextForTts(text, provider === 'piper' ? 350 : 200);
     const optionParams = new URLSearchParams({
       lang,
       provider,
       speaker,
-      voice,
       lengthScale,
       noiseScale,
       noiseW
     });
+    optionParams.set('_', `${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const urls = chunks.map(chunk => `/api/tts/audio?${optionParams.toString()}&text=${encodeURIComponent(chunk)}`);
 
     res.json({ ok: true, provider, lang, urls, url: urls[0] });
@@ -294,67 +216,70 @@ app.get('/api/tts', async (req, res) => {
 });
 
 app.get('/api/tts/status', async (req, res) => {
-  const windowsVoices = await listWindowsSpeechVoices();
+  const defaults = ttsSettings.current();
+  const piperConfig = getPiperConfigDetails();
+  const piperRuntime = getPiperRuntimeStatus();
   res.json({
     ok: true,
     data: {
-      provider: TTS_PROVIDER,
-      providers: getSupportedTtsProviders(),
-      defaultLang: process.env.TTS_LANG || 'en',
+      provider: defaults.provider,
+      providerLabel: defaults.provider === 'piper' ? 'Piper local voice' : defaults.provider,
+      defaultLang: defaults.lang || 'en',
       defaults: {
-        piperSpeaker: process.env.TTS_PIPER_SPEAKER || process.env.PIPER_SPEAKER || '',
-        piperLengthScale: process.env.TTS_PIPER_LENGTH_SCALE || '',
-        piperNoiseScale: process.env.TTS_PIPER_NOISE_SCALE || '',
-        piperNoiseW: process.env.TTS_PIPER_NOISE_W || '',
-        windowsVoice: process.env.TTS_WINDOWS_VOICE || ''
+        piperSpeaker: defaults.piperSpeaker || '',
+        piperLengthScale: defaults.piperLengthScale || '',
+        piperNoiseScale: defaults.piperNoiseScale || '',
+        piperNoiseW: defaults.piperNoiseW || ''
       },
-      windowsVoices,
-      piperConfigured: Boolean(process.env.TTS_PIPER_MODEL || process.env.PIPER_MODEL)
+      options: {
+        lang: [
+          defaults.lang || 'en',
+          'en',
+          'en-US',
+          'en-GB'
+        ].filter((value, index, list) => value && list.indexOf(value) === index),
+        piperSpeaker: piperConfig.speakers || [],
+        piperLengthScale: piperConfig.lengthScale || [],
+        piperNoiseScale: piperConfig.noiseScale || [],
+        piperNoiseW: piperConfig.noiseW || []
+      },
+      piperConfig,
+      piperRuntime,
+      piperConfigured: piperRuntime.hasModel
     }
   });
 });
 
+app.post('/api/tts/settings', admin.requireAdmin, (req, res) => {
+  try {
+    const saved = ttsSettings.save(req.body || {});
+    logger.info(`TTS settings updated by ${req.user?.email || req.user?.preferred_username || req.user?.name || 'admin'}`);
+    res.json({ ok: true, data: saved });
+  } catch (err) {
+    logger.error('tts settings save failed', err?.message || err);
+    res.status(500).json({ ok: false, error: 'Could not save TTS settings' });
+  }
+});
+
 app.get('/api/tts/audio', async (req, res) => {
   const text = req.query.text || '';
-  const lang = req.query.lang || 'en';
-  const provider = resolveTtsProvider(req.query.provider, TTS_PROVIDER);
+  const defaults = ttsSettings.current();
+  const lang = req.query.lang || defaults.lang || 'en';
+  const provider = resolveTtsProvider(req.query.provider, defaults.provider);
   const options = {
     piper: {
-      speaker: req.query.speaker,
-      lengthScale: req.query.lengthScale,
-      noiseScale: req.query.noiseScale,
-      noiseW: req.query.noiseW
-    },
-    windows: {
-      voice: req.query.voice || process.env.TTS_WINDOWS_VOICE || ''
+      speaker: req.query.speaker || defaults.piperSpeaker,
+      lengthScale: req.query.lengthScale || defaults.piperLengthScale,
+      noiseScale: req.query.noiseScale || defaults.piperNoiseScale,
+      noiseW: req.query.noiseW || defaults.piperNoiseW
     }
   };
   if (!text) return res.status(400).json({ ok: false, error: 'text required' });
+  const readinessError = ttsReadinessError(provider);
+  if (readinessError) return res.status(503).json({ ok: false, error: readinessError });
 
   try {
-    let result;
-
-    try {
-      result = await synthesizeConfiguredSpeech(text, lang, provider, options);
-    } catch (err) {
-      logger.warn(`${provider} tts failed`, err?.message || err);
-      if (provider === 'piper') {
-        try {
-          result = await synthesizeGoogleSpeech(text, lang);
-        } catch (googleErr) {
-          logger.warn('google-tts-api audio failed, using local speech fallback', googleErr?.message || googleErr);
-        }
-      }
-
-      if (!result) {
-        logger.warn('using local speech fallback');
-        result = {
-          audio: await synthesizeLocalSpeech(text, options.windows),
-          contentType: 'audio/wav',
-          provider: 'windows'
-        };
-      }
-    }
+    const result = await synthesizeConfiguredSpeech(text, lang, provider, options);
 
     res.setHeader('Content-Type', result.contentType);
     res.setHeader('X-TTS-Provider', result.provider);
@@ -400,9 +325,10 @@ function applyAiRules(req, res, next) {
 
   const prep = (AI_RULES.transformations && AI_RULES.transformations.prepend) || [];
   const append = (AI_RULES.transformations && AI_RULES.transformations.append) || [];
+  const bobChatSkillInstructions = buildBobChatSkillInstructions(req);
   req.ai = {
     originalPrompt: prompt,
-    systemInstructions: [...prep, ...append]
+    systemInstructions: [...bobChatSkillInstructions, ...prep, ...append]
   };
   next();
 }
@@ -439,39 +365,57 @@ function sendSseError(res, err) {
   res.end();
 }
 
-function buildMemorySummaryPrompt(scope, transcript) {
-  const instructions = {
-    short: 'Create a concise short-term memory summary of the latest conversation. Capture immediate goals, current task state, preferences stated today, and unresolved next steps. Ignore greetings, small talk, and assistant mistakes unless they created an unresolved user-facing issue. Keep it under 120 words.',
-    medium: 'Create a medium-term memory summary across the recent conversation history. Capture recurring preferences, active projects, decisions, constraints, and useful context. Ignore greetings, small talk, and assistant mistakes unless they reveal a durable user preference or active problem. Keep it under 250 words.',
-    long: 'Create a long-term memory summary suitable for durable personalization. Capture stable user preferences, enduring projects, identity/context facts the user intentionally revealed, and durable operating principles. Avoid transient details, greetings, and assistant mistakes. Keep it under 400 words.'
-  };
-
-  return [
-    'You are Bob memory summarization skill.',
-    instructions[scope] || instructions.short,
-    'Only summarize information supported by the transcript. Do not invent facts.',
-    'Write in third person about the user and Bob.',
-    'Return only the summary text. Do not quote or reproduce the transcript. Do not write a preamble like "Based on the transcript". Do not include markdown tables.',
-    '',
-    '<conversation_transcript>',
-    transcript || '(No conversation messages yet.)',
-    '</conversation_transcript>'
-  ].join('\n');
+function isAdminRequest(req) {
+  return Boolean(req.roles?.includes('admin'));
 }
 
-function buildFactoidExtractionPrompt(transcript) {
-  return [
-    'You are Bob memory factoid extraction skill.',
-    'Extract durable facts about the user that would help future conversations.',
-    'Only include facts explicitly supported by the transcript. Do not infer sensitive attributes, secrets, medical facts, financial account data, or credentials.',
-    'Prefer stable preferences, ongoing projects, names the user asked Bob to remember, working style, environment details, and durable constraints.',
-    'Return only JSON with this shape: {"factoids":[{"factKey":"short-stable-key","category":"preference|project|identity|environment|workflow|constraint|general","fact":"The user ...","confidence":0.0}]}',
-    'If there are no durable user facts, return {"factoids":[]}.',
-    '',
-    '<conversation_transcript>',
-    transcript || '(No conversation messages yet.)',
-    '</conversation_transcript>'
-  ].join('\n');
+function ollamaDebugMetadata(req, input, output) {
+  if (!isAdminRequest(req)) return {};
+  return {
+    ollamaInput: typeof input === 'string' ? input : JSON.stringify(input || ''),
+    ollamaOutput: typeof output === 'string' ? output : JSON.stringify(output || {})
+  };
+}
+
+function bobContractDebugOutput(contract) {
+  return JSON.stringify({
+    response: contract?.response || '',
+    metadata: contract?.metadata || {}
+  }, null, 2);
+}
+
+function bobContextUsageKey(req, conversationId = 'default') {
+  return `${requestDatabaseUserKey(req)}:${conversationId}`;
+}
+
+function rememberBobContextUsage({ req, conversationId = 'default', model, promptTokens }) {
+  const tokens = Number(promptTokens);
+  if (!Number.isFinite(tokens) || tokens < 0) return;
+  bobContextUsage.set(bobContextUsageKey(req, conversationId), {
+    model,
+    inputTokens: tokens,
+    tokenMethod: 'ollama-prompt-eval-count',
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function getBobContextUsage(req, conversationId = 'default') {
+  return bobContextUsage.get(bobContextUsageKey(req, conversationId)) || null;
+}
+
+function buildBobContextMetadata({ estimatedInputTokens, actualInputTokens, tokenMethod, model, conversationId = 'default' }) {
+  const actual = Number(actualInputTokens);
+  const hasActual = Number.isFinite(actual) && actual >= 0;
+  const estimated = Math.max(0, Number(estimatedInputTokens) || 0);
+  return {
+    model,
+    conversationId,
+    Estimated: estimated,
+    Actual: hasActual ? actual : null,
+    tokenMethod: hasActual ? (tokenMethod || 'ollama-prompt-eval-count') : 'local-character-estimate',
+    modelContextTokens: memorySkill.budget.modelContextTokens,
+    triggerTokens: Math.round(memorySkill.budget.modelContextTokens * memorySkill.budget.triggerRatio)
+  };
 }
 
 async function generateOllamaText(model, prompt, options = {}) {
@@ -479,6 +423,7 @@ async function generateOllamaText(model, prompt, options = {}) {
     model,
     prompt,
     stream: false,
+    keep_alive: ollamaConfig.current().keepAlive,
     options
   }, {
     responseType: 'json',
@@ -489,11 +434,50 @@ async function generateOllamaText(model, prompt, options = {}) {
   return String(response.data?.response || '').trim();
 }
 
+async function buildBobPromptContext({ req, prompt, conversationId = 'default' }) {
+  const [summaries, factoids] = await Promise.all([
+    memory.getSummaries({ req }),
+    memory.getFactoids({ req, limit: 50 })
+  ]);
+  const history = typeof memory.getUnprocessedMessages === 'function'
+    ? await memory.getUnprocessedMessages({
+      req,
+      summaries,
+      limit: memory.summaryScopes.short?.limit || 24,
+      conversationId
+    })
+    : await memory.getRecent({ req, conversationId });
+  const promptWithMemory = memory.buildPrompt(prompt, history, summaries, factoids, {
+    systemInstructions: req.ai?.systemInstructions || []
+  });
+
+  return {
+    factoids,
+    history,
+    promptWithMemory,
+    summaries
+  };
+}
+
+const memorySkill = createMemorySkillService({
+  memory,
+  logger,
+  generateText: generateOllamaText,
+  intervals: MEMORY_SUMMARY_INTERVALS,
+  budget: MEMORY_BUDGET,
+  getErrorText
+});
+
 async function runWebSearchSkill({ req, model, prompt }) {
   const query = extractSearchQuery(prompt);
   const results = await searchWeb(query);
+  const inputContract = buildSkillInputContract({
+    skill: 'web-search',
+    prompt,
+    context: { query, results }
+  });
   const summaryPrompt = buildWebSummaryPrompt(prompt, query, results);
-  const summary = await generateOllamaText(model, summaryPrompt, { temperature: 0.2 });
+  const rawSummary = await generateOllamaText(model, summaryPrompt, { temperature: 0.2 });
   const fallback = results.length
     ? [
         `I searched the web for "${query}" and found these sources:`,
@@ -501,103 +485,27 @@ async function runWebSearchSkill({ req, model, prompt }) {
         ...results.map((item, index) => `${index + 1}. ${item.title} - ${item.url}${item.snippet ? `\n   ${item.snippet}` : ''}`)
       ].join('\n')
     : `I searched the web for "${query}", but I could not find usable results.`;
+  const contract = parseSkillOutputContract(rawSummary, {
+    skill: 'web-search',
+    response: fallback,
+    emotion: results.length ? 'focused' : 'concerned',
+    data: { query },
+    sources: results
+  });
+  contract.output.data = { query, ...(contract.output.data || {}) };
+  contract.output.sources = contract.output.sources.length ? contract.output.sources : results;
 
   return {
     query,
     results,
-    response: summary || fallback
+    inputContract,
+    outputContract: contract,
+    response: contract.output.response || fallback,
+    metadata: contract.output.metadata,
+    sources: contract.output.sources,
+    ollamaInput: summaryPrompt,
+    ollamaOutput: rawSummary || fallback
   };
-}
-
-const memorySummaryJobs = new Set();
-const memoryFactoidJobs = new Set();
-
-function transcriptFromMessages(messages) {
-  return messages
-    .map(row => `${row.role === 'assistant' ? 'Bob' : row.role === 'system' ? 'System' : 'User'}: ${row.content}`)
-    .join('\n\n');
-}
-
-async function refreshMemorySummary({ req, model, scope, conversationId = 'default' }) {
-  const scopeConfig = memory.summaryScopes[scope];
-  if (!scopeConfig) throw new Error('Invalid memory scope');
-
-  const messages = await memory.getMessages({ req, limit: scopeConfig.limit, conversationId });
-  const summaryText = await generateOllamaText(model, buildMemorySummaryPrompt(scope, transcriptFromMessages(messages)), { temperature: 0.2 });
-  return memory.saveSummary({
-    req,
-    scope,
-    summary: summaryText || 'No durable memory has been formed yet.',
-    sourceMessageCount: messages.length,
-    model
-  });
-}
-
-async function updateMemorySummariesAfterTurn({ req, model, conversationId = 'default' }) {
-  try {
-    const [summaries, messageCount] = await Promise.all([
-      memory.getSummaries({ req }),
-      memory.getMessageCount({ req, conversationId })
-    ]);
-
-    const dueScopes = Object.keys(memory.summaryScopes).filter(scope => {
-      const interval = Math.max(1, MEMORY_SUMMARY_INTERVALS[scope] || 1);
-      const sourceCount = Number(summaries[scope]?.sourceMessageCount || 0);
-      return messageCount > 0 && messageCount - sourceCount >= interval;
-    });
-
-    for (const scope of dueScopes) {
-      const jobKey = `${memory.userKey(req)}:${conversationId}:${scope}`;
-      if (memorySummaryJobs.has(jobKey)) continue;
-
-      memorySummaryJobs.add(jobKey);
-      refreshMemorySummary({ req, model, scope, conversationId })
-        .then(summary => logger.info(`Memory ${scope} summary refreshed from ${summary.sourceMessageCount} messages`))
-        .catch(err => logger.warn(`Memory ${scope} summary refresh failed`, getErrorText(err)))
-        .finally(() => memorySummaryJobs.delete(jobKey));
-    }
-  } catch (err) {
-    logger.warn('Memory summary scheduler failed', getErrorText(err));
-  }
-}
-
-function parseFactoidExtraction(text) {
-  if (!text) return [];
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return [];
-  try {
-    const parsed = JSON.parse(match[0]);
-    return Array.isArray(parsed.factoids) ? parsed.factoids : [];
-  } catch (err) {
-    return [];
-  }
-}
-
-async function updateMemoryFactoidsAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null }) {
-  const jobKey = `${memory.userKey(req)}:${conversationId}:factoids`;
-  if (memoryFactoidJobs.has(jobKey)) return;
-
-  memoryFactoidJobs.add(jobKey);
-  try {
-    const messages = await memory.getMessages({ req, limit: 16, conversationId });
-    const text = await generateOllamaText(model, buildFactoidExtractionPrompt(transcriptFromMessages(messages)), { temperature: 0.1 });
-    const saved = await memory.saveFactoids({
-      req,
-      model,
-      sourceMessageId,
-      factoids: parseFactoidExtraction(text)
-    });
-    if (saved.length > 0) logger.info(`Memory factoids refreshed: ${saved.length} saved`);
-  } catch (err) {
-    logger.warn('Memory factoid refresh failed', getErrorText(err));
-  } finally {
-    memoryFactoidJobs.delete(jobKey);
-  }
-}
-
-function updateMemoryAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null }) {
-  updateMemorySummariesAfterTurn({ req, model, conversationId });
-  updateMemoryFactoidsAfterTurn({ req, model, conversationId, sourceMessageId });
 }
 
 // expose rules endpoints
@@ -612,6 +520,57 @@ app.post('/api/rules', admin.requireAdmin, (req, res) => {
 
 app.get('/api/memory/history', memory.historyHandler);
 app.get('/api/memory/manager', memory.managerHandler);
+app.get('/api/memory/context', applyAiRules, async (req, res) => {
+  try {
+    const model = req.query.model || DEFAULT_MODEL;
+    const conversationId = req.query.conversationId || 'default';
+    const prompt = req.ai?.originalPrompt || req.query.prompt || '';
+    const [context, messageCount] = await Promise.all([
+      buildBobPromptContext({ req, prompt, conversationId }),
+      memory.getMessageCount({ req, conversationId })
+    ]);
+    const { history, summaries, promptWithMemory } = context;
+    const estimatedInputTokens = estimateTokens(promptWithMemory);
+    const actualUsage = getBobContextUsage(req, conversationId);
+    const inputTokens = actualUsage?.inputTokens ?? estimatedInputTokens;
+    const budget = memorySkill.budget;
+    const memoryPressureTokens = Object.values(summaries || {}).reduce((total, summary) => total + estimateTokens(summary?.summary), 0) +
+      (history || []).reduce((total, message) => total + estimateTokens(message?.content), 0);
+    const messageDue = Object.keys(memory.summaryScopes).some(scope => {
+      const interval = Math.max(1, Number(MEMORY_SUMMARY_INTERVALS[scope]) || 1);
+      const sourceCount = Number(summaries[scope]?.sourceMessageCount || 0);
+      return messageCount > 0 && messageCount - sourceCount >= interval;
+    });
+    const contextDue = isContextPressureHigh(summaries, history, budget);
+
+    res.json({
+      ok: true,
+      data: {
+        model,
+        conversationId,
+        inputTokens,
+        estimatedInputTokens,
+        actualInputTokens: actualUsage?.inputTokens ?? null,
+        tokenMethod: actualUsage?.tokenMethod || 'local-character-estimate',
+        actualUpdatedAt: actualUsage?.updatedAt || null,
+        modelContextTokens: budget.modelContextTokens,
+        usageRatio: Math.min(1, inputTokens / Math.max(1, budget.modelContextTokens)),
+        triggerRatio: budget.triggerRatio,
+        triggerTokens: Math.round(budget.modelContextTokens * budget.triggerRatio),
+        memoryPressureTokens,
+        memoryPressureTriggerTokens: Math.round(budget.availableMemoryTokens * budget.triggerRatio),
+        updateDue: messageDue || contextDue,
+        updateReason: contextDue ? 'context' : messageDue ? 'messages' : '',
+        updating: memorySkill.isUpdating({ req, conversationId }),
+        unprocessedMessages: history.length,
+        maxWords: budget.maxWords
+      }
+    });
+  } catch (err) {
+    logger.error('memory context error', getErrorText(err));
+    res.status(500).json({ ok: false, error: 'Memory context unavailable' });
+  }
+});
 app.delete('/api/memory/messages/:id', async (req, res) => {
   try {
     const deleted = await memory.deleteMessage({ req, id: req.params.id });
@@ -646,13 +605,16 @@ app.delete('/api/memory', async (req, res) => {
   }
 });
 app.post('/api/memory/summarize', async (req, res) => {
-  const scope = req.body?.scope || 'short';
+  const scope = req.body?.scope || 'cascade';
   const scopeConfig = memory.summaryScopes[scope];
-  if (!scopeConfig) return res.status(400).json({ ok: false, error: 'Invalid memory scope' });
+  const isCascade = scope === 'cascade' || scope === 'all';
+  if (!isCascade && !scopeConfig) return res.status(400).json({ ok: false, error: 'Invalid memory scope' });
 
   try {
     const model = req.body?.model || DEFAULT_MODEL;
-    const summary = await refreshMemorySummary({ req, model, scope, conversationId: req.body?.conversationId || 'default' });
+    const summary = isCascade
+      ? await memorySkill.runCascadeUpdate({ req, model, conversationId: req.body?.conversationId || 'default' })
+      : await memorySkill.refreshSummary({ req, model, scope, conversationId: req.body?.conversationId || 'default' });
     res.json({ ok: true, data: summary });
   } catch (err) {
     const error = getErrorText(err);
@@ -662,6 +624,14 @@ app.post('/api/memory/summarize', async (req, res) => {
 });
 app.get('/api/admin/bootstrap/status', admin.bootstrapStatus);
 app.post('/api/admin/bootstrap', admin.bootstrapSelf);
+app.get('/api/admin/links', admin.requireAdmin, (req, res) => {
+  res.json({
+    ok: true,
+    data: {
+      vaultwarden: process.env.VAULT_SITE || ''
+    }
+  });
+});
 app.get('/api/admin/users', admin.requireAdmin, admin.listUsers);
 app.post('/api/admin/users/:userKey/roles/admin', admin.requireAdmin, admin.setUserAdmin);
 app.delete('/api/admin/users/:userKey/roles/admin', admin.requireAdmin, admin.removeUserAdmin);
@@ -692,41 +662,92 @@ app.post('/api/chat', applyAiRules, async (req, res) => {
         role: 'assistant',
         model: chatModel,
         content: search.response,
-        metadata: { skill: 'web-search', query: search.query, results: search.results }
+        metadata: {
+          skill: 'web-search',
+          skills: ['web-search'],
+          ...search.metadata,
+          inputContract: search.inputContract,
+          outputContract: search.outputContract,
+          query: search.query,
+          results: search.sources,
+          ...ollamaDebugMetadata(req, search.ollamaInput, search.ollamaOutput)
+        }
       });
-      updateMemoryAfterTurn({ req, model: chatModel });
+      memorySkill.updateAfterTurn({ req, model: chatModel });
       return res.json({
         ok: true,
         data: {
           response: search.response,
           done: true,
           skill: 'web-search',
+          skills: ['web-search'],
+          metadata: search.metadata,
+          inputContract: search.inputContract,
+          outputContract: search.outputContract,
           query: search.query,
-          sources: search.results
+          sources: search.sources,
+          ...(isAdminRequest(req) ? { ollamaInput: search.ollamaInput, ollamaOutput: search.ollamaOutput } : {})
         }
       });
     }
 
-    const [history, summaries, factoids] = await Promise.all([
-      memory.getRecent({ req }),
-      memory.getSummaries({ req }),
-      memory.getFactoids({ req, limit: 50 })
-    ]);
-    const promptWithMemory = memory.buildPrompt(originalPrompt, history, summaries, factoids, {
-      systemInstructions: req.ai?.systemInstructions || []
+    const { promptWithMemory } = await buildBobPromptContext({
+      req,
+      prompt: originalPrompt
     });
-    const payload = Object.assign({ model: chatModel, prompt: promptWithMemory }, parameters || {});
+    const payload = Object.assign({
+      model: chatModel,
+      prompt: promptWithMemory,
+      keep_alive: ollamaConfig.current().keepAlive
+    }, parameters || {});
 
     const resp = await axios.post(`${OLLAMA_URL}/api/generate`, payload, {
       responseType: 'json',
       headers: { 'Content-Type': 'application/json' },
       timeout: 120000
     });
+    const estimatedInputTokens = estimateTokens(promptWithMemory);
+    const actualInputTokens = Number(resp.data?.prompt_eval_count);
+    rememberBobContextUsage({
+      req,
+      model: chatModel,
+      promptTokens: actualInputTokens
+    });
 
     await memory.addMessage({ req, role: 'user', model: chatModel, content: originalPrompt });
-    const assistantMessage = await memory.addMessage({ req, role: 'assistant', model: chatModel, content: resp.data?.response || JSON.stringify(resp.data) });
-    updateMemoryAfterTurn({ req, model: chatModel, sourceMessageId: assistantMessage?.id });
-    res.json({ ok: true, data: resp.data });
+    const rawBobOutput = String(resp.data?.response || '');
+    const bobContract = parseBobChatContract(rawBobOutput);
+    const ctxMetadata = buildBobContextMetadata({
+      estimatedInputTokens,
+      actualInputTokens,
+      tokenMethod: 'ollama-prompt-eval-count',
+      model: chatModel
+    });
+    const responseMetadata = {
+      ...bobContract.metadata,
+      ctx: ctxMetadata
+    };
+    const assistantMessage = await memory.addMessage({
+      req,
+      role: 'assistant',
+      model: chatModel,
+      content: bobContract.response,
+      metadata: {
+        skill: 'bob-chat',
+        skills: ['bob-chat'],
+        ...responseMetadata,
+        ...ollamaDebugMetadata(req, promptWithMemory, bobContractDebugOutput(bobContract))
+      }
+    });
+    memorySkill.updateAfterTurn({ req, model: chatModel, sourceMessageId: assistantMessage?.id });
+    res.json({
+      ok: true,
+      data: {
+        ...resp.data,
+        response: bobContract.response,
+        metadata: responseMetadata
+      }
+    });
   } catch (err) {
     const error = getErrorText(err);
     logger.error('chat error', error);
@@ -756,31 +777,43 @@ app.get('/api/stream', applyAiRules, async (req, res) => {
         role: 'assistant',
         model,
         content: search.response,
-        metadata: { skill: 'web-search', query: search.query, results: search.results }
+        metadata: {
+          skill: 'web-search',
+          skills: ['web-search'],
+          ...search.metadata,
+          inputContract: search.inputContract,
+          outputContract: search.outputContract,
+          query: search.query,
+          results: search.sources,
+          ...ollamaDebugMetadata(req, search.ollamaInput, search.ollamaOutput)
+        }
       });
-      updateMemoryAfterTurn({ req, model });
+      memorySkill.updateAfterTurn({ req, model });
 
       res.write(`data: ${JSON.stringify({
         response: search.response,
         done: true,
         skill: 'web-search',
+        skills: ['web-search'],
+        metadata: search.metadata,
+        inputContract: search.inputContract,
+        outputContract: search.outputContract,
         query: search.query,
-        sources: search.results
+        sources: search.sources,
+        ...(isAdminRequest(req) ? { ollamaInput: search.ollamaInput, ollamaOutput: search.ollamaOutput } : {})
       })}\n\n`);
       res.write('event: done\ndata: [DONE]\n\n');
       return res.end();
     }
 
-    const [history, summaries, factoids] = await Promise.all([
-      memory.getRecent({ req }),
-      memory.getSummaries({ req }),
-      memory.getFactoids({ req, limit: 50 })
-    ]);
+    const { promptWithMemory } = await buildBobPromptContext({
+      req,
+      prompt: originalPrompt
+    });
     const payload = {
       model,
-      prompt: memory.buildPrompt(originalPrompt, history, summaries, factoids, {
-        systemInstructions: req.ai?.systemInstructions || []
-      })
+      keep_alive: ollamaConfig.current().keepAlive,
+      prompt: promptWithMemory
     };
     await memory.addMessage({ req, role: 'user', model, content: originalPrompt });
     const resp = await axios.post(`${OLLAMA_URL}/api/generate`, payload, {
@@ -793,9 +826,14 @@ app.get('/api/stream', applyAiRules, async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders && res.flushHeaders();
+    res.write(`event: skills\ndata: ${JSON.stringify({ skills: ['bob-chat'] })}\n\n`);
+    if (isAdminRequest(req)) {
+      res.write(`event: ollama-debug\ndata: ${JSON.stringify({ ollamaInput: payload.prompt })}\n\n`);
+    }
 
     const stream = resp.data;
-    let assistantResponse = '';
+    let rawAssistantResponse = '';
+    let promptEvalCount = null;
 
     stream.on('data', (chunk) => {
       try {
@@ -804,16 +842,52 @@ app.get('/api/stream', applyAiRules, async (req, res) => {
           if (!line) return;
           try {
             const parsed = JSON.parse(line);
-            if (typeof parsed.response === 'string') assistantResponse += parsed.response;
+            if (typeof parsed.response === 'string') rawAssistantResponse += parsed.response;
+            const parsedPromptEvalCount = Number(parsed.prompt_eval_count);
+            if (Number.isFinite(parsedPromptEvalCount) && parsedPromptEvalCount >= 0) {
+              promptEvalCount = parsedPromptEvalCount;
+            }
           } catch (parseErr) {}
-          res.write(`data: ${line}\n\n`);
         });
-      } catch (e) { res.write(`data: ${chunk}\n\n`); }
+      } catch (e) {}
     });
 
     stream.on('end', async () => {
-      const assistantMessage = await memory.addMessage({ req, role: 'assistant', model, content: assistantResponse });
-      updateMemoryAfterTurn({ req, model, sourceMessageId: assistantMessage?.id });
+      const estimatedInputTokens = estimateTokens(promptWithMemory);
+      rememberBobContextUsage({ req, model, promptTokens: promptEvalCount });
+      const bobContract = parseBobChatContract(rawAssistantResponse);
+      const ctxMetadata = buildBobContextMetadata({
+        estimatedInputTokens,
+        actualInputTokens: promptEvalCount,
+        tokenMethod: 'ollama-prompt-eval-count',
+        model
+      });
+      const responseMetadata = {
+        ...bobContract.metadata,
+        ctx: ctxMetadata
+      };
+      const assistantMessage = await memory.addMessage({
+        req,
+        role: 'assistant',
+        model,
+        content: bobContract.response,
+        metadata: {
+          skill: 'bob-chat',
+          skills: ['bob-chat'],
+          ...responseMetadata,
+          ...ollamaDebugMetadata(req, payload.prompt, bobContractDebugOutput(bobContract))
+        }
+      });
+      memorySkill.updateAfterTurn({ req, model, sourceMessageId: assistantMessage?.id });
+      if (isAdminRequest(req)) {
+        res.write(`event: ollama-debug\ndata: ${JSON.stringify({ ollamaOutput: bobContractDebugOutput(bobContract) })}\n\n`);
+      }
+      res.write(`event: bob-response\ndata: ${JSON.stringify({
+        response: bobContract.response,
+        metadata: responseMetadata,
+        skill: 'bob-chat',
+        skills: ['bob-chat']
+      })}\n\n`);
       res.write('event: done\ndata: [DONE]\n\n');
       res.end();
     });
@@ -877,6 +951,28 @@ app.post('/api/ollama/pull', admin.requireAdmin, (req, res) => {
         res.json({ ok: true, out: stdout });
       });
     });
+});
+
+app.get('/api/ollama/config', admin.requireAdmin, (req, res) => {
+  res.json({
+    ok: true,
+    data: {
+      url: OLLAMA_URL,
+      defaultModel: DEFAULT_MODEL,
+      ...ollamaConfig.current()
+    }
+  });
+});
+
+app.post('/api/ollama/config', admin.requireAdmin, (req, res) => {
+  try {
+    const saved = ollamaConfig.save(req.body || {});
+    logger.info(`Ollama config updated by ${req.user?.email || req.user?.preferred_username || req.user?.name || 'admin'}`);
+    res.json({ ok: true, data: saved });
+  } catch (err) {
+    logger.error('ollama config save failed', err?.message || err);
+    res.status(500).json({ ok: false, error: 'Could not save Ollama config' });
+  }
 });
 
 // Remove a model via the ollama CLI
@@ -988,6 +1084,7 @@ app.get('/api/ollama/monitor/details', admin.requireAdmin, async (req, res) => {
     data: {
       url: OLLAMA_URL,
       defaultModel: DEFAULT_MODEL,
+      config: ollamaConfig.current(),
       version: version.data || null,
       models: tags.data?.models || [],
       running: running.data?.models || [],

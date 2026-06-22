@@ -1,6 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { SUMMARY_SCOPES, createMemoryStore, defaultSummaries } = require('../server/memory');
+const {
+  SUMMARY_SCOPES,
+  annotateMemoryProcessed,
+  createMemoryStore,
+  defaultSummaries,
+  emotionForMessage,
+  hydrateMessageEmotion,
+  transcriptRoleLabel,
+  unprocessedMessageLimit
+} = require('../server/memory');
+const { buildMemoryMergePrompt, buildMemorySummaryPrompt } = require('../server/memorySummary');
 
 test('memory summary scopes define short, medium, and long horizons', () => {
   assert.deepEqual(Object.keys(SUMMARY_SCOPES), ['short', 'medium', 'long']);
@@ -13,6 +23,31 @@ test('defaultSummaries returns empty summaries for every scope', () => {
   assert.equal(summaries.short.summary, '');
   assert.equal(summaries.medium.sourceMessageCount, 0);
   assert.equal(summaries.long.updatedAt, null);
+});
+
+test('memory summary prompt requires prioritized memory bullets instead of chat logs', () => {
+  const prompt = buildMemorySummaryPrompt('medium', 'User: I prefer bulleted memory.\nAssistant: Got it.');
+
+  assert.match(prompt, /Return 4-7 prioritized markdown bullets, most important first\./);
+  assert.match(prompt, /Do not write chat logs, speaker turns, numbered transcript recaps/);
+  assert.match(prompt, /Each bullet must be a concise third-person memory/);
+  assert.match(prompt, /If no useful memory is supported, return exactly "- No durable memory has been formed yet\."/);
+  assert.doesNotMatch(prompt, /Return only the summary text/);
+});
+
+test('memory merge prompt preserves existing memory when incoming memory is weaker', () => {
+  const prompt = buildMemoryMergePrompt('medium', {
+    existingSummary: '- The user prefers backend memory behavior.',
+    incomingMemory: '- The user said thanks.',
+    incomingLabel: 'existing short-term memory',
+    maxWords: 180
+  });
+
+  assert.match(prompt, /Merge existing short-term memory into Bob's medium-term memory/);
+  assert.match(prompt, /Preserve high-value existing memory/);
+  assert.match(prompt, /If the incoming memory is less important than the existing memory, return the existing memory unchanged/);
+  assert.match(prompt, /under 180 words total/);
+  assert.match(prompt, /<existing_memory>\n- The user prefers backend memory behavior\./);
 });
 
 test('buildPrompt includes saved memory summaries and recent transcript', () => {
@@ -76,4 +111,87 @@ test('buildPrompt labels previous assistant output as background only', () => {
   assert.match(prompt, /<recent_transcript>\nAssistant: Can you explain machine learning\?/);
   assert.match(prompt, /<current_user_message>\nHi\n<\/current_user_message>/);
   assert.match(prompt, /Respond to <current_user_message> now\.$/);
+});
+
+test('message emotion helpers persist assistant emotional state only', () => {
+  assert.equal(emotionForMessage('assistant', { emotion: 'Focused' }), 'focused');
+  assert.equal(emotionForMessage('assistant', { emotion: 'wild' }), 'idle');
+  assert.equal(emotionForMessage('user', { emotion: 'happy' }), null);
+});
+
+test('hydrateMessageEmotion mirrors database emotion into metadata', () => {
+  assert.deepEqual(
+    hydrateMessageEmotion({
+      id: 1,
+      role: 'assistant',
+      content: 'Done.',
+      emotion: 'confident',
+      metadata: { skill: 'bob-chat' }
+    }),
+    {
+      id: 1,
+      role: 'assistant',
+      content: 'Done.',
+      emotion: 'confident',
+      metadata: { skill: 'bob-chat', emotion: 'confident' }
+    }
+  );
+});
+
+test('buildPrompt includes assistant emotional state in recent transcript', () => {
+  const memory = createMemoryStore({ warn() {}, error() {}, info() {} });
+  const prompt = memory.buildPrompt(
+    'Continue',
+    [{ role: 'assistant', content: 'I fixed the parser.', emotion: 'focused', metadata: { emotion: 'focused' } }]
+  );
+
+  assert.match(prompt, /Assistant \[emotion=focused\]: I fixed the parser\./);
+});
+
+test('unprocessedMessageLimit drops processed chat from future prompt context', () => {
+  assert.equal(
+    unprocessedMessageLimit({
+      summaries: { short: { sourceMessageCount: 12 } },
+      messageCount: 12,
+      limit: 24
+    }),
+    0
+  );
+  assert.equal(
+    unprocessedMessageLimit({
+      summaries: { short: { sourceMessageCount: 12 } },
+      messageCount: 17,
+      limit: 24
+    }),
+    5
+  );
+  assert.equal(
+    unprocessedMessageLimit({
+      summaries: { short: { sourceMessageCount: 12 } },
+      messageCount: 40,
+      limit: 10
+    }),
+    10
+  );
+});
+
+test('annotateMemoryProcessed marks rows compacted into short-term memory', () => {
+  const rows = annotateMemoryProcessed([
+    { id: 1, role: 'assistant', content: 'Old answer', memorySequence: 2, metadata: { skill: 'bob-chat' } },
+    { id: 2, role: 'assistant', content: 'Fresh answer', memorySequence: 5, metadata: { skill: 'bob-chat' } }
+  ], {
+    short: { sourceMessageCount: 3 }
+  });
+
+  assert.equal(rows[0].memoryProcessed, true);
+  assert.equal(rows[0].metadata.memoryProcessed, true);
+  assert.equal(rows[1].memoryProcessed, false);
+  assert.equal(rows[1].metadata.memoryProcessed, false);
+});
+
+test('transcriptRoleLabel falls back to metadata emotion', () => {
+  assert.equal(
+    transcriptRoleLabel({ role: 'assistant', metadata: { emotion: 'curious' } }),
+    'Assistant [emotion=curious]'
+  );
 });

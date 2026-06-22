@@ -1,6 +1,6 @@
 <section class="panel-view app-tester-view">
   <div class="monitor-toolbar">
-    <h3>App Tester</h3>
+    <h3>Bob's Face</h3>
     <span id="bobVoiceProvider" class="stream-status">Voice loading</span>
   </div>
 
@@ -46,45 +46,45 @@
           <span id="bobCurrentLookDot" class="tester-look-dot current"></span>
           <span id="bobLookDot" class="tester-look-dot"></span>
         </div>
-        <button id="bobLookReset" type="button">Center</button>
       </div>
     </section>
 
     <section class="monitor-card tester-speech-card">
       <h4>Speech</h4>
-      <label class="tester-provider-control" for="bobVoiceEngine">
-        <span>Engine</span>
-        <select id="bobVoiceEngine">
-          <option value="google">Google Translate TTS</option>
-          <option value="piper">Piper local voice</option>
-          <option value="windows">Windows local voice</option>
-        </select>
-      </label>
+      <div class="tester-provider-control" aria-label="Configured voice generator">
+        <span>Generator</span>
+        <strong id="bobVoiceEngine">Piper local voice</strong>
+      </div>
       <div class="tester-voice-options">
         <label for="bobVoiceLang">
           <span>Language</span>
-          <input id="bobVoiceLang" type="text" value="en" autocomplete="off">
+          <select id="bobVoiceLang">
+            <option value="en">English</option>
+          </select>
         </label>
         <label for="bobPiperSpeaker">
           <span>Piper Speaker</span>
-          <input id="bobPiperSpeaker" type="text" placeholder="Default">
+          <select id="bobPiperSpeaker">
+            <option value="">Default</option>
+          </select>
         </label>
         <label for="bobPiperLengthScale">
           <span>Length Scale</span>
-          <input id="bobPiperLengthScale" type="number" step="0.05" placeholder="Default">
+          <select id="bobPiperLengthScale">
+            <option value="">Default</option>
+          </select>
         </label>
         <label for="bobPiperNoiseScale">
           <span>Noise Scale</span>
-          <input id="bobPiperNoiseScale" type="number" step="0.05" placeholder="Default">
+          <select id="bobPiperNoiseScale">
+            <option value="">Default</option>
+          </select>
         </label>
         <label for="bobPiperNoiseW">
           <span>Noise W</span>
-          <input id="bobPiperNoiseW" type="number" step="0.05" placeholder="Default">
-        </label>
-        <label for="bobWindowsVoice">
-          <span>Windows Voice</span>
-          <input id="bobWindowsVoice" type="text" list="bobWindowsVoiceList" placeholder="Default installed voice">
-          <datalist id="bobWindowsVoiceList"></datalist>
+          <select id="bobPiperNoiseW">
+            <option value="">Default</option>
+          </select>
         </label>
       </div>
       <textarea id="bobVoiceText" rows="7" placeholder="Type something for Bob to speak.">Hello. This is Bob testing the configured voice renderer.</textarea>
@@ -96,6 +96,10 @@
         <button id="bobVoiceStop" type="button">
           <i data-lucide="square"></i>
           Stop
+        </button>
+        <button id="bobVoiceApplyServer" type="button">
+          <i data-lucide="server-cog"></i>
+          Apply Current Voice
         </button>
       </div>
       <canvas id="bobVoiceWaveform" width="640" height="120"></canvas>

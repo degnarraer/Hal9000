@@ -36,8 +36,14 @@ panel.innerHTML = `
   <div id="menuContent" class="panel-body"></div>
 `;
 
+const panelBackdrop = document.createElement('div');
+panelBackdrop.id = 'slidePanelBackdrop';
+panelBackdrop.className = 'slide-panel-backdrop';
+panelBackdrop.setAttribute('aria-hidden', 'true');
+
 menuBtn.style.cssText = (menuBtn.style.cssText || '') + 'z-index:10000;';
 panel.style.cssText = (panel.style.cssText || '') + 'position:fixed;right:0;top:0;bottom:var(--lower-banner-reserve);width:min(360px, calc(100vw - 16px));z-index:20000;transform:translateX(100%);transition:transform 240ms ease;pointer-events:none;';
+document.body.appendChild(panelBackdrop);
 document.body.appendChild(panel);
 
 function applyPanelOpenState(isOpen) {
@@ -49,6 +55,7 @@ function applyPanelOpenState(isOpen) {
   panel.style.transform = isOpen ? 'translateX(0)' : 'translateX(100%)';
   panel.style.pointerEvents = isOpen ? 'auto' : 'none';
   panel.classList.toggle('open', isOpen);
+  panelBackdrop.classList.toggle('open', isOpen);
 
   const currentMenuBtn = document.getElementById('fabMenu');
   currentMenuBtn?.classList.toggle('open', isOpen);
@@ -74,6 +81,25 @@ document.addEventListener('click', event => {
 panel.querySelector('#closePanel')?.addEventListener('click', event => {
   event.preventDefault();
   applyPanelOpenState(false);
+});
+
+function absorbPanelEvent(event) {
+  if (!panel.classList.contains('open')) return;
+  event.stopPropagation();
+}
+
+function closeFromBackdrop(event) {
+  if (!panel.classList.contains('open')) return;
+  event.preventDefault();
+  event.stopPropagation();
+  setPanelOpen(false);
+}
+
+['pointerdown', 'pointerup', 'click', 'touchstart', 'touchmove', 'touchend', 'wheel'].forEach(type => {
+  panel.addEventListener(type, absorbPanelEvent, { passive: type === 'wheel' ? false : true });
+});
+['pointerdown', 'click', 'touchstart', 'touchmove', 'wheel'].forEach(type => {
+  panelBackdrop.addEventListener(type, closeFromBackdrop, { passive: false });
 });
 
 const main = document.querySelector('.main');
@@ -132,11 +158,15 @@ function initAdminMenu() {
   mainPage.querySelectorAll('[data-admin-route]').forEach(button => {
     button.addEventListener('click', () => loadMainPage(button.dataset.adminRoute));
   });
+  mainPage.querySelectorAll('[data-admin-external]').forEach(button => {
+    button.addEventListener('click', () => openAdminExternal(button.dataset.adminExternal));
+  });
 }
 
 const routes = {
   skills: { title: 'Skills Menu', url: '/menu-pages/skills.html', init: initSkills },
-  memory: { title: 'Memory', url: '/menu-pages/memory.html', init: initMemory },
+  memory: { title: "Bob's Memory", url: '/menu-pages/memory.html', init: initMemory },
+  memoryRequirements: { title: "Bob's Memory Requirements", url: '/menu-pages/memory-requirements.html', init: initMemoryRequirements },
   webSearch: { title: 'Web Search Summary', url: '/menu-pages/web-search.html', init: initWebSearchSkill },
   yahoo: { title: 'Yahoo', url: '/menu-pages/yahoo.html', init: initYahooSkill },
   userChat: { title: 'User Chat', url: '/menu-pages/user-chat.html', init: initUserChat },
@@ -145,7 +175,7 @@ const routes = {
   models: { title: 'Models', url: '/menu-pages/models.html', init: initModels, admin: true },
   monitor: { title: 'Monitor', url: '/menu-pages/monitor.html', init: initMonitor, admin: true },
   logging: { title: 'Logging', url: '/menu-pages/logging.html', init: initLogging, admin: true },
-  appTester: { title: 'App Tester', url: '/menu-pages/app-tester.html', init: initAppTester, admin: true },
+  appTester: { title: "Bob's Face", url: '/menu-pages/app-tester.html', init: initAppTester, admin: true },
   activity: { title: 'Activity', url: '/menu-pages/activity.html', init: initActivity, admin: true },
   security: { title: 'Security', url: '/menu-pages/security.html', init: initSecurity, admin: true },
   remote: { title: 'Remote Control', url: '/menu-pages/remote.html', init: initRemote, admin: true },
@@ -156,7 +186,7 @@ const menuSubmenus = {
   skills: {
     title: 'Skills Menu',
     items: [
-      { route: 'memory', icon: 'brain', title: 'Memory', description: "Review chat memory and Bob's summaries." },
+      { route: 'memory', icon: 'brain', title: "Bob's Memory", description: "Review chat memory and Bob's summaries." },
       { route: 'webSearch', icon: 'search', title: 'Web Search Summary', description: 'Search current web results and summarize them with sources.' },
       { route: 'yahoo', icon: 'mail', title: 'Yahoo', description: 'Link Yahoo with OAuth and manage Bob access.' }
     ]
@@ -166,12 +196,13 @@ const menuSubmenus = {
     admin: true,
     items: [
       { route: 'users', icon: 'users', title: 'Users', description: 'Review seen users and manage admin access.' },
-      { route: 'models', icon: 'boxes', title: 'Models', description: 'Install, remove, and download Ollama models.' },
-      { route: 'monitor', icon: 'activity', title: 'Monitor', description: 'Check the current Ollama server state.' },
-      { route: 'appTester', icon: 'flask-conical', title: 'App Tester', description: 'Run admin-only test endpoints and UI probes.' },
+      { route: 'models', icon: 'boxes', title: 'Models', description: 'Install, remove, and download Bob models.' },
+      { route: 'monitor', icon: 'activity', title: 'Monitor', description: 'Check the current Bob server state.' },
+      { route: 'appTester', icon: 'flask-conical', title: "Bob's Face", description: 'Test Bob face rendering and the configured voice.' },
       { route: 'logging', icon: 'logs', title: 'Logging', description: 'Watch recent server activity.' },
       { route: 'activity', icon: 'chart-line', title: 'Activity', description: 'Track users, actions, and connection rates.' },
       { route: 'security', icon: 'shield-alert', title: 'Security', description: 'Review auth failures and admin access denials.' },
+      { external: 'vaultwarden', icon: 'vault', title: 'Vaultwarden', description: 'Open the secrets vault and admin panel.' },
       { route: 'remote', icon: 'power', title: 'Remote Control', description: 'Restart the local server process.' }
     ]
   }
@@ -320,6 +351,9 @@ async function loadMenuLanding() {
         loadMainPage(routeName);
       });
     });
+    menuContent.querySelectorAll('[data-menu-external]').forEach(button => {
+      button.addEventListener('click', () => openAdminExternal(button.dataset.menuExternal));
+    });
     renderMenuIcons();
   } catch (err) {
     menuContent.innerHTML = `<div class="menu-error">Could not load menu: ${escapeHtml(err.message)}</div>`;
@@ -332,7 +366,7 @@ function slideToSubmenu(submenuName) {
   const rootHtml = menuContent.querySelector('.menu-slide-root')?.innerHTML || '';
 
   const childHtml = submenu.items.map(item => `
-    <button class="menu-item" type="button" data-menu-route="${escapeHtml(item.route)}">
+    <button class="menu-item" type="button" ${item.external ? `data-menu-external="${escapeHtml(item.external)}"` : `data-menu-route="${escapeHtml(item.route)}"`}>
       <i data-lucide="${escapeHtml(item.icon)}"></i>
       <span>
         <strong>${escapeHtml(item.title)}</strong>
@@ -364,10 +398,28 @@ function slideToSubmenu(submenuName) {
       });
     });
   });
+  menuContent.querySelectorAll('[data-menu-external]').forEach(button => {
+    button.addEventListener('click', () => openAdminExternal(button.dataset.menuExternal));
+  });
   renderMenuIcons();
   requestAnimationFrame(() => {
     menuContent.querySelector('.menu-slide-shell')?.classList.add('show-child');
   });
+}
+
+async function openAdminExternal(key) {
+  if (!currentUser.isAdmin) return;
+
+  try {
+    const response = await fetchWithAuthRedirect('/api/admin/links', { cache: 'no-store' });
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Unable to load admin links');
+    const url = json.data?.[key];
+    if (!url) throw new Error('Admin link is not configured');
+    window.location.href = url;
+  } catch (err) {
+    await window.__dialog.alert({ title: 'Admin Link Unavailable', message: err.message });
+  }
 }
 
 function filterMenuForRole() {

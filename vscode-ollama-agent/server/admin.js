@@ -1,15 +1,8 @@
 const { Pool } = require('pg');
+const { databaseUserKey, userEmail } = require('./userIdentity');
 
 const ADMIN_ROLE = 'admin';
 const USER_ROLE = 'user';
-
-function userKey(user = {}) {
-  return user.sub || user.email || user.preferred_username || user.name || 'anonymous';
-}
-
-function userEmail(user = {}) {
-  return String(user.email || user.preferred_username || user.upn || '').toLowerCase();
-}
 
 function normalizeRole(role) {
   const value = String(role || '').trim().toLowerCase();
@@ -96,7 +89,7 @@ function createAdminStore(logger, securityEvents = null) {
     try {
       const result = await pool.query(
         'SELECT role FROM app_user_roles WHERE user_key = $1 ORDER BY role',
-        [userKey(user)]
+        [databaseUserKey(user)]
       );
       result.rows.map(row => normalizeRole(row.role)).filter(Boolean).forEach(role => roles.add(role));
       return Array.from(roles).sort();
@@ -141,7 +134,7 @@ function createAdminStore(logger, securityEvents = null) {
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (user_key, role) DO UPDATE
        SET email = EXCLUDED.email`,
-      [userKey(user), userEmail(user), normalizedRole, grantedBy]
+      [databaseUserKey(user), userEmail(user), normalizedRole, grantedBy]
     );
   }
 
@@ -151,7 +144,7 @@ function createAdminStore(logger, securityEvents = null) {
     if (!normalizedRole || normalizedRole === USER_ROLE) throw new Error('Role cannot be removed');
     await pool.query(
       'DELETE FROM app_user_roles WHERE user_key = $1 AND role = $2',
-      [userKey(user), normalizedRole]
+      [databaseUserKey(user), normalizedRole]
     );
   }
 
@@ -164,7 +157,7 @@ function createAdminStore(logger, securityEvents = null) {
           data: {
             persistent: false,
             users: [{
-              userKey: userKey(current),
+              userKey: databaseUserKey(current),
               name: current.name || current.preferred_username || current.email || 'Signed in user',
               email: userEmail(current),
               roles: req.roles || [USER_ROLE],
@@ -254,7 +247,7 @@ function createAdminStore(logger, securityEvents = null) {
         email: req.body?.email || '',
         name: req.body?.name || req.params.userKey
       };
-      const grantedBy = userEmail(req.user) || userKey(req.user);
+      const grantedBy = databaseUserKey(req.user);
       await grantRole(target, ADMIN_ROLE, grantedBy);
       res.json({ ok: true });
     } catch (err) {
@@ -265,7 +258,7 @@ function createAdminStore(logger, securityEvents = null) {
 
   async function removeUserAdmin(req, res) {
     try {
-      if (req.params.userKey === userKey(req.user) && (await countAdmins()) <= 1) {
+      if (req.params.userKey === databaseUserKey(req.user) && (await countAdmins()) <= 1) {
         return res.status(400).json({ ok: false, error: 'Cannot remove the last admin role from yourself' });
       }
       await revokeRole({ sub: req.params.userKey }, ADMIN_ROLE);
@@ -347,6 +340,5 @@ module.exports = {
   USER_ROLE,
   createAdminStore,
   normalizeRole,
-  rolesFromClaims,
-  userKey
+  rolesFromClaims
 };

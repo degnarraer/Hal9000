@@ -389,49 +389,106 @@ class BobExpressionEngine {
     if (!this.parts.headTop && !this.parts.headRight && !this.parts.headBottom && !this.parts.headLeft) return;
     const x = -Math.max(-1, Math.min(1, lookX / 12));
     const y = -Math.max(-1, Math.min(1, lookY / 8));
-    const baseDepth = 5;
-    const depthRange = 42;
-    const rightDepth = baseDepth + Math.max(0, x) * depthRange;
-    const leftDepth = baseDepth + Math.max(0, -x) * depthRange;
-    const topDepth = baseDepth + Math.max(0, -y) * depthRange;
-    const bottomDepth = baseDepth + Math.max(0, y) * depthRange;
-    const depthX = x * 22;
-    const depthY = y * 22;
     const depthFill = '#1f3f82';
-    const scaleX = 1 - Math.abs(x) * 0.16;
-    const scaleY = 1 - Math.abs(y) * 0.12;
+    const scaleX = 1 - Math.abs(x) * 0.18;
+    const scaleY = 1 - Math.abs(y) * 0.13;
     const frontLeft = 256 - 192 * scaleX;
     const frontRight = 256 + 192 * scaleX;
     const frontTop = 256 - 192 * scaleY;
     const frontBottom = 256 + 192 * scaleY;
-    const backLeft = frontLeft + depthX - leftDepth * 0.7;
-    const backRight = frontRight + depthX + rightDepth * 0.7;
-    const backTop = frontTop + depthY - topDepth;
-    const backBottom = frontBottom + depthY + bottomDepth;
+    const cornerX = 64 * scaleX;
+    const cornerY = 64 * scaleY;
+    const visibleX = Math.abs(x);
+    const visibleY = Math.abs(y);
+    const turnAmount = Math.min(1, Math.hypot(x, y));
+    const vanishingPoint = {
+      x: 256 + x * (700 + visibleX * 230),
+      y: 256 + y * (700 + visibleY * 230)
+    };
+    const projectDepth = (point, amount) => ({
+      x: point.x + (vanishingPoint.x - point.x) * amount,
+      y: point.y + (vanishingPoint.y - point.y) * amount
+    });
+    const depth = 0.06 + turnAmount * 0.032;
+    const frontTopLeft = { x: frontLeft + cornerX, y: frontTop };
+    const frontTopRight = { x: frontRight - cornerX, y: frontTop };
+    const frontRightTop = { x: frontRight, y: frontTop + cornerY };
+    const frontRightBottom = { x: frontRight, y: frontBottom - cornerY };
+    const frontBottomRight = { x: frontRight - cornerX, y: frontBottom };
+    const frontBottomLeft = { x: frontLeft + cornerX, y: frontBottom };
+    const frontLeftBottom = { x: frontLeft, y: frontBottom - cornerY };
+    const frontLeftTop = { x: frontLeft, y: frontTop + cornerY };
+    const frontTopLeftCorner = { x: frontLeft, y: frontTop };
+    const frontTopRightCorner = { x: frontRight, y: frontTop };
+    const frontBottomRightCorner = { x: frontRight, y: frontBottom };
+    const frontBottomLeftCorner = { x: frontLeft, y: frontBottom };
+    const backTopLeft = projectDepth(frontTopLeft, depth);
+    const backTopRight = projectDepth(frontTopRight, depth);
+    const backRightTop = projectDepth(frontRightTop, depth);
+    const backRightBottom = projectDepth(frontRightBottom, depth);
+    const backBottomRight = projectDepth(frontBottomRight, depth);
+    const backBottomLeft = projectDepth(frontBottomLeft, depth);
+    const backLeftBottom = projectDepth(frontLeftBottom, depth);
+    const backLeftTop = projectDepth(frontLeftTop, depth);
+    const backTopLeftCorner = projectDepth(frontTopLeftCorner, depth);
+    const backTopRightCorner = projectDepth(frontTopRightCorner, depth);
+    const backBottomRightCorner = projectDepth(frontBottomRightCorner, depth);
+    const backBottomLeftCorner = projectDepth(frontBottomLeftCorner, depth);
+    const point = value => `${value.x.toFixed(2)} ${value.y.toFixed(2)}`;
+    const linePath = (...points) => points
+      .map((value, index) => `${index === 0 ? 'M' : 'L'}${point(value)}`)
+      .join(' ') + 'Z';
+    const cornerControl = (control, start, end) => ({
+      x: control.x * 0.74 + ((start.x + end.x) / 2) * 0.26,
+      y: control.y * 0.74 + ((start.y + end.y) / 2) * 0.26
+    });
+    const depthOpacity = String(0.16 + turnAmount * 0.42);
 
-    this.parts.headTop?.setAttribute('d', `M${frontLeft} ${frontTop}H${frontRight}L${backRight} ${backTop}H${backLeft}Z`);
+    this.parts.headTop?.setAttribute('d', [
+      `M${point(frontLeftTop)}`,
+      `Q${point(cornerControl(frontTopLeftCorner, frontLeftTop, frontTopLeft))} ${point(frontTopLeft)}`,
+      `L${point(frontTopRight)}`,
+      `Q${point(cornerControl(frontTopRightCorner, frontTopRight, frontRightTop))} ${point(frontRightTop)}`,
+      `L${point(backRightTop)}`,
+      `Q${point(cornerControl(backTopRightCorner, backRightTop, backTopRight))} ${point(backTopRight)}`,
+      `L${point(backTopLeft)}`,
+      `Q${point(cornerControl(backTopLeftCorner, backTopLeft, backLeftTop))} ${point(backLeftTop)}`,
+      'Z'
+    ].join(' '));
     this.parts.headTop?.setAttribute('fill', depthFill);
-    this.parts.headTop?.setAttribute('opacity', String(0.08 + Math.max(0, -y) * 0.58 + Math.abs(x) * 0.05));
+    this.parts.headTop?.setAttribute('opacity', depthOpacity);
 
-    this.parts.headRight?.setAttribute('d', `M${frontRight} ${frontTop}L${backRight} ${backTop}V${backBottom}L${frontRight} ${frontBottom}Z`);
+    this.parts.headRight?.setAttribute('d', linePath(frontRightTop, backRightTop, backRightBottom, frontRightBottom));
     this.parts.headRight?.setAttribute('fill', depthFill);
-    this.parts.headRight?.setAttribute('opacity', String(0.06 + Math.max(0, x) * 0.62 + Math.abs(y) * 0.05));
+    this.parts.headRight?.setAttribute('opacity', depthOpacity);
 
-    this.parts.headBottom?.setAttribute('d', `M${frontLeft} ${frontBottom}H${frontRight}L${backRight} ${backBottom}H${backLeft}Z`);
+    this.parts.headBottom?.setAttribute('d', [
+      `M${point(frontLeftBottom)}`,
+      `Q${point(cornerControl(frontBottomLeftCorner, frontLeftBottom, frontBottomLeft))} ${point(frontBottomLeft)}`,
+      `L${point(frontBottomRight)}`,
+      `Q${point(cornerControl(frontBottomRightCorner, frontBottomRight, frontRightBottom))} ${point(frontRightBottom)}`,
+      `L${point(backRightBottom)}`,
+      `Q${point(cornerControl(backBottomRightCorner, backRightBottom, backBottomRight))} ${point(backBottomRight)}`,
+      `L${point(backBottomLeft)}`,
+      `Q${point(cornerControl(backBottomLeftCorner, backBottomLeft, backLeftBottom))} ${point(backLeftBottom)}`,
+      'Z'
+    ].join(' '));
     this.parts.headBottom?.setAttribute('fill', depthFill);
-    this.parts.headBottom?.setAttribute('opacity', String(0.07 + Math.max(0, y) * 0.55 + Math.abs(x) * 0.05));
+    this.parts.headBottom?.setAttribute('opacity', depthOpacity);
 
-    this.parts.headLeft?.setAttribute('d', `M${frontLeft} ${frontTop}L${backLeft} ${backTop}V${backBottom}L${frontLeft} ${frontBottom}Z`);
+    this.parts.headLeft?.setAttribute('d', linePath(frontLeftTop, backLeftTop, backLeftBottom, frontLeftBottom));
     this.parts.headLeft?.setAttribute('fill', depthFill);
-    this.parts.headLeft?.setAttribute('opacity', String(0.05 + Math.max(0, -x) * 0.62 + Math.abs(y) * 0.05));
+    this.parts.headLeft?.setAttribute('opacity', depthOpacity);
   }
 
   headCompression(lookX = 0, lookY = 0) {
     const x = Math.max(-1, Math.min(1, lookX / 12));
     const y = Math.max(-1, Math.min(1, lookY / 8));
-    const scaleX = 1 - Math.abs(x) * 0.16;
-    const scaleY = 1 - Math.abs(y) * 0.12;
-    return `translate(${256 * (1 - scaleX)} ${256 * (1 - scaleY)}) scale(${scaleX} ${scaleY})`;
+    const scaleX = 1 - Math.abs(x) * 0.18;
+    const scaleY = 1 - Math.abs(y) * 0.13;
+    const offsetX = -x * 9;
+    const offsetY = -y * 6;
+    return `translate(${256 * (1 - scaleX) + offsetX} ${256 * (1 - scaleY) + offsetY}) scale(${scaleX} ${scaleY})`;
   }
 
   setMouthStyle({ strokeWidth = 28, fill = 'none', linecap = 'round' } = {}) {

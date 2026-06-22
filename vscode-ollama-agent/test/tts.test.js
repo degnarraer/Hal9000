@@ -1,26 +1,106 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   getTtsProvider,
   buildPiperEnv,
+  getPiperConfigDetails,
+  getPiperRuntimeStatus,
   getSupportedTtsProviders,
   piperArgsForOutput,
   resolveTtsProvider,
   splitTextForTts
 } = require('../server/tts');
+const { sanitizeSettings } = require('../server/ttsSettings');
 
-test('getTtsProvider defaults to google and accepts piper', () => {
-  assert.equal(getTtsProvider({}), 'google');
+test('getTtsProvider defaults to piper', () => {
+  assert.equal(getTtsProvider({}), 'piper');
   assert.equal(getTtsProvider({ TTS_PROVIDER: 'piper' }), 'piper');
-  assert.equal(getTtsProvider({ TTS_PROVIDER: 'unknown' }), 'google');
+  assert.equal(getTtsProvider({ TTS_PROVIDER: 'unknown' }), 'piper');
 });
 
 test('tts provider helpers expose and resolve supported engines', () => {
-  assert.deepEqual(getSupportedTtsProviders(), ['google', 'piper', 'windows']);
-  assert.equal(resolveTtsProvider('piper', 'google'), 'piper');
-  assert.equal(resolveTtsProvider('windows', 'google'), 'windows');
+  assert.deepEqual(getSupportedTtsProviders(), ['piper']);
+  assert.equal(resolveTtsProvider('piper', 'piper'), 'piper');
   assert.equal(resolveTtsProvider('unknown', 'piper'), 'piper');
+});
+
+test('getPiperConfigDetails exposes speaker options from Piper config', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bob-piper-config-'));
+  const configPath = path.join(dir, 'voice.onnx.json');
+  fs.writeFileSync(configPath, JSON.stringify({ speaker_id_map: { alice: 1, bob: 0 } }), 'utf8');
+
+  const details = getPiperConfigDetails({ TTS_PIPER_CONFIG: configPath });
+
+  assert.equal(details.loaded, true);
+  assert.deepEqual(details.speakers, [
+    { label: 'bob', value: '0' },
+    { label: 'alice', value: '1' }
+  ]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('getPiperRuntimeStatus reports missing and configured model state', () => {
+  assert.equal(getPiperRuntimeStatus({}).hasModel, false);
+  assert.deepEqual(
+    getPiperRuntimeStatus({ TTS_PIPER_MODEL: 'voice.onnx', TTS_PIPER_CONFIG: 'voice.onnx.json' }),
+    {
+      provider: 'piper',
+      bin: 'piper',
+      hasModel: true,
+      hasConfig: true,
+      configLoaded: false
+    }
+  );
+});
+
+test('sanitizeSettings accepts admin-applied voice defaults', () => {
+  assert.deepEqual(
+    sanitizeSettings({
+      provider: 'piper',
+      lang: 'en-US',
+      piperSpeaker: '1',
+      piperLengthScale: '1.1',
+      piperNoiseScale: '0.5',
+      piperNoiseW: '0.7'
+    }, {}),
+    {
+      provider: 'piper',
+      lang: 'en-US',
+      piperSpeaker: '1',
+      piperLengthScale: '1.1',
+      piperNoiseScale: '0.5',
+      piperNoiseW: '0.7'
+    }
+  );
+});
+
+test('sanitizeSettings falls back from invalid providers', () => {
+  assert.equal(sanitizeSettings({ provider: 'bogus' }, { TTS_PROVIDER: 'piper', TTS_LANG: 'en' }).provider, 'piper');
+});
+
+test('sanitizeSettings treats Default labels as empty config values', () => {
+  assert.deepEqual(
+    sanitizeSettings({
+      provider: 'piper',
+      lang: 'en',
+      piperSpeaker: 'Default',
+      piperLengthScale: 'Default',
+      piperNoiseScale: 'Default',
+      piperNoiseW: 'Default'
+    }, {}),
+    {
+      provider: 'piper',
+      lang: 'en',
+      piperSpeaker: '',
+      piperLengthScale: '',
+      piperNoiseScale: '',
+      piperNoiseW: ''
+    }
+  );
 });
 
 test('buildPiperEnv applies tester voice overrides', () => {

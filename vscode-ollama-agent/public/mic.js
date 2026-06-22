@@ -51,6 +51,11 @@ async function startMic() {
     }
 
     logAppliedMicSettings(mediaStream);
+    finalTranscriptBuffer = '';
+    speechRecognitionFailed = false;
+    detectedAudioWhileSpeechFailed = false;
+    setMicButtonState(true);
+    setMicTranscript('Listening...');
 
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') {
@@ -65,11 +70,6 @@ async function startMic() {
     sourceNode.connect(analyser);
 
     console.log('audio started, bufferLength=', bufferLength);
-    finalTranscriptBuffer = '';
-    speechRecognitionFailed = false;
-    detectedAudioWhileSpeechFailed = false;
-    setMicButtonState(true);
-    setMicTranscript('Listening...');
     drawWaveform();
     startSpeechRecognition();
   } catch (e) {
@@ -321,7 +321,6 @@ function setMicTranscript(text) {
 
 if (micToggle) {
   micToggle.addEventListener('click', async () => {
-    window.__chat?.unlockAudio?.();
     if (micToggle.dataset.running === '1' || startingMic) {
       stopMic();
     } else {

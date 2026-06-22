@@ -1,15 +1,12 @@
 const { Pool } = require('pg');
-
-function getUserKey(user = {}) {
-  return user.sub || user.email || user.preferred_username || user.name || 'anonymous';
-}
+const { databaseUserKey, userDisplayName, userEmail } = require('./userIdentity');
 
 function getDisplayName(user = {}) {
-  return user.name || user.preferred_username || user.email || 'Signed in user';
+  return userDisplayName(user);
 }
 
 function getEmail(user = {}) {
-  return String(user.email || user.preferred_username || user.upn || '').toLowerCase();
+  return userEmail(user);
 }
 
 function createUserChatStore(logger) {
@@ -82,7 +79,7 @@ function createUserChatStore(logger) {
              public_key_jwk = EXCLUDED.public_key_jwk,
              fingerprint = EXCLUDED.fingerprint,
              updated_at = now()`,
-        [getUserKey(req.user), getDisplayName(req.user), getEmail(req.user), publicKeyJwk, fingerprint]
+        [databaseUserKey(req.user), getDisplayName(req.user), getEmail(req.user), publicKeyJwk, fingerprint]
       );
       res.json({ ok: true });
     } catch (err) {
@@ -139,7 +136,7 @@ function createUserChatStore(logger) {
           fingerprint: row.fingerprint || '',
           updatedAt: row.updated_at,
           canChat: Boolean(row.public_key_jwk),
-          isSelf: row.user_key === getUserKey(req.user)
+          isSelf: row.user_key === databaseUserKey(req.user)
         }))
       });
     } catch (err) {
@@ -159,7 +156,7 @@ function createUserChatStore(logger) {
         return res.status(400).json({ ok: false, error: 'recipientKey, ciphertext, and iv are required' });
       }
 
-      const senderKey = getUserKey(req.user);
+      const senderKey = databaseUserKey(req.user);
       const keys = await pool.query(
         `SELECT user_key, public_key_jwk
          FROM user_chat_keys
@@ -192,7 +189,7 @@ function createUserChatStore(logger) {
   async function listMessages(req, res) {
     try {
       if (!(await ensureReady())) return res.status(503).json({ ok: false, error: 'User chat database unavailable' });
-      const self = getUserKey(req.user);
+      const self = databaseUserKey(req.user);
       const withUser = String(req.query.with || '').trim();
       const limit = Math.max(1, Math.min(Number(req.query.limit) || 100, 500));
       const params = withUser ? [self, withUser, limit] : [self, limit];

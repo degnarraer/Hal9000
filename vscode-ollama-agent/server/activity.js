@@ -4,14 +4,11 @@ const ONLINE_WINDOW_MS = 5 * 60 * 1000;
 const ACTIVE_WINDOW_MS = 20 * 1000;
 const SAMPLE_INTERVAL_MS = 5 * 1000;
 const SAMPLE_RETENTION_HOURS = 24;
-
-function userKey(user = {}) {
-  return user.sub || user.email || user.preferred_username || user.name || 'anonymous';
-}
+const { databaseUserKey, systemUserKey } = require('./userIdentity');
 
 function isTrackableUser(user = {}) {
-  const key = userKey(user);
-  return key && !['anonymous', 'public-asset', 'public-route', 'auth-login', 'auth-start', 'auth-register', 'auth-callback', 'auth-logout', 'local-dev'].includes(key);
+  if (user.systemKey) return false;
+  return Boolean(user.sub);
 }
 
 function userLabel(user = {}) {
@@ -171,7 +168,7 @@ function createActivityMonitor(logger) {
   }
 
   async function upsertUserState({ user, roles, action, activeDelta }) {
-    const key = userKey(user);
+    const key = user.systemKey ? systemUserKey(user.systemKey) : databaseUserKey(user);
     const name = user.name || user.preferred_username || user.email || 'Signed in user';
     const email = userLabel(user);
 
@@ -249,7 +246,7 @@ function createActivityMonitor(logger) {
 
     const roles = req.roles || ['user'];
     const action = routeLabel(req);
-    const key = userKey(user);
+    const key = user.systemKey ? systemUserKey(user.systemKey) : databaseUserKey(user);
     const email = userLabel(user);
     const requestUploadBytes = Number(req.headers['content-length'] || 0) || 0;
     let responseDownloadBytes = 0;
@@ -385,6 +382,5 @@ module.exports = {
   createActivityMonitor,
   chunkBytes,
   isTrackableUser,
-  routeLabel,
-  userKey
+  routeLabel
 };

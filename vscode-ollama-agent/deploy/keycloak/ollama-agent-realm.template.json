@@ -43,6 +43,28 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "vaultwarden",
+      "name": "Vaultwarden",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "__VAULTWARDEN_SSO_CLIENT_SECRET__",
+      "redirectUris": [
+        "__VAULTWARDEN_REDIRECT_URI__"
+      ],
+      "webOrigins": [
+        "__VAULT_ORIGIN__"
+      ],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "post.logout.redirect.uris": "__VAULT_ORIGIN__/*",
+        "access.token.lifespan": "600"
+      }
     }
   ]
 }

@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { databaseUserKey } = require('./userIdentity');
 
 const sessions = new Map();
 const authStates = new Map();
@@ -11,6 +12,14 @@ const AUTH_STATE_TTL_MS = 30 * 60 * 1000;
 
 function parseBool(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
+}
+
+function actorKey(user, fallback) {
+  try {
+    return databaseUserKey(user);
+  } catch (err) {
+    return fallback;
+  }
 }
 
 function setting(rows, key, fallback) {
@@ -261,18 +270,18 @@ function createSecurityMiddleware(logger, securityEvents = null) {
 
   async function authenticate(req, res, next) {
     if (isPublicBrowserAsset(req)) {
-      markPassed(req, { name: 'public-asset' });
+      markPassed(req, { systemKey: 'public-asset', name: 'public-asset' });
       return next();
     }
 
     const policy = routePolicy(req, config);
     if (policy.security === 'public') {
-      markPassed(req, { name: 'public-route' });
+      markPassed(req, { systemKey: 'public-route', name: 'public-route' });
       return next();
     }
 
     if (!config.enabled) {
-      markPassed(req, { name: 'local-dev' });
+      markPassed(req, { systemKey: 'local-dev', name: 'local-dev' });
       return next();
     }
 
@@ -281,7 +290,7 @@ function createSecurityMiddleware(logger, securityEvents = null) {
       if (bearer) {
         const user = await verifyJwt(bearer, config);
         if (!isAuthorized(user, config)) {
-          recordSecurity(req, { severity: 'warn', type: 'auth_forbidden', actor: user.email || user.preferred_username || user.sub || 'bearer-user', status: 403, detail: 'Bearer token user is not allowed by configured allowlist' });
+          recordSecurity(req, { severity: 'warn', type: 'auth_forbidden', actor: actorKey(user, 'bearer-user'), status: 403, detail: 'Bearer token user is not allowed by configured allowlist' });
           return res.status(403).json({ ok: false, error: 'Forbidden' });
         }
         markPassed(req, user);
@@ -315,7 +324,7 @@ function createSecurityMiddleware(logger, securityEvents = null) {
   }
 
   async function login(req, res) {
-    markPassed(req, { name: 'auth-login' });
+    markPassed(req, { systemKey: 'auth-login', name: 'auth-login' });
     if (!config.enabled) return res.redirect('/');
     res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
   }
@@ -395,14 +404,14 @@ function createSecurityMiddleware(logger, securityEvents = null) {
 
       const user = await verifyJwt(tokenResp.data.id_token, config, state.nonce);
       if (!isAuthorized(user, config)) {
-        recordSecurity(req, { severity: 'warn', type: 'auth_forbidden', actor: user.email || user.preferred_username || user.sub || 'callback-user', status: 403, detail: 'OIDC user is not allowed by configured allowlist' });
+        recordSecurity(req, { severity: 'warn', type: 'auth_forbidden', actor: actorKey(user, 'callback-user'), status: 403, detail: 'OIDC user is not allowed by configured allowlist' });
         return res.status(403).send('Forbidden');
       }
 
       const sessionId = crypto.randomUUID();
       sessions.set(sessionId, { user, expiresAt: Date.now() + config.sessionTtlMs });
       res.setHeader('Set-Cookie', cookie('ollama_agent_session', sessionId, { secure: config.secureCookies, maxAge: Math.floor(config.sessionTtlMs / 1000) }));
-      recordSecurity(req, { severity: 'info', type: 'login_success', actor: user.email || user.preferred_username || user.sub || 'callback-user', status: 302, detail: 'OIDC login completed' });
+      recordSecurity(req, { severity: 'info', type: 'login_success', actor: actorKey(user, 'callback-user'), status: 302, detail: 'OIDC login completed' });
       res.redirect('/');
     } catch (err) {
       const detail = err?.response?.data ? JSON.stringify(err.response.data) : err.message;

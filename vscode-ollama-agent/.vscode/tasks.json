@@ -46,19 +46,6 @@
       }
     },
     {
-      "label": "Public Website / Deploy App and Caddy",
-      "type": "shell",
-      "command": "npm.cmd run docker:prod:deploy-web",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": [],
-      "presentation": {
-        "reveal": "always",
-        "panel": "dedicated"
-      }
-    },
-    {
       "label": "Public Website / Redeploy Everything",
       "type": "shell",
       "command": "npm.cmd run public-site:redeploy",
@@ -118,6 +105,19 @@
         "cwd": "${workspaceFolder}"
       },
       "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Secrets / Vaultwarden Secrets",
+      "type": "shell",
+      "command": "npm.cmd run secrets:vault",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "problemMatcher": [],
       "presentation": {
         "reveal": "always",

@@ -1,4 +1,6 @@
 const { Pool } = require('pg');
+const { requestDatabaseUserKey } = require('./userIdentity');
+const { normalizeBobEmotion } = require('./bobSkillContracts');
 
 const DEFAULT_HISTORY_LIMIT = 12;
 const SUMMARY_SCOPES = {
@@ -6,11 +8,6 @@ const SUMMARY_SCOPES = {
   medium: { limit: 100, title: 'Medium term memory' },
   long: { limit: 500, title: 'Long term memory' }
 };
-
-function userKey(req) {
-  const user = req.user || {};
-  return user.sub || user.email || user.preferred_username || user.name || 'anonymous';
-}
 
 function createMemoryStore(logger) {
   const enabled = String(process.env.MEMORY_ENABLED || 'true').toLowerCase() !== 'false';
@@ -35,12 +32,23 @@ function createMemoryStore(logger) {
         role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
         model TEXT,
         content TEXT NOT NULL,
+        emotion TEXT,
         metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
+    await pool.query('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS emotion TEXT');
+    await pool.query(`
+      UPDATE chat_messages
+      SET emotion = lower(metadata->>'emotion')
+      WHERE role = 'assistant'
+        AND emotion IS NULL
+        AND metadata ? 'emotion'
+        AND metadata->>'emotion' <> ''
+    `);
     await pool.query('CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created ON chat_messages (user_key, created_at DESC)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_created ON chat_messages (user_key, conversation_id, created_at DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_chat_messages_user_emotion_created ON chat_messages (user_key, emotion, created_at DESC)');
     await pool.query(`
       CREATE TABLE IF NOT EXISTS memory_summaries (
         user_key TEXT NOT NULL,
@@ -88,13 +96,15 @@ function createMemoryStore(logger) {
   async function addMessage({ req, role, model, content, conversationId = 'default', metadata = {} }) {
     if (!content || !(await ensureReady())) return null;
     try {
+      const emotion = emotionForMessage(role, metadata);
+      const storedMetadata = emotion ? { ...metadata, emotion } : metadata;
       const result = await pool.query(
-        `INSERT INTO chat_messages (user_key, conversation_id, role, model, content, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, role, model, content, created_at`,
-        [userKey(req), conversationId, role, model || null, content, metadata]
+        `INSERT INTO chat_messages (user_key, conversation_id, role, model, content, emotion, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, role, model, content, emotion, metadata, created_at`,
+        [requestDatabaseUserKey(req), conversationId, role, model || null, content, emotion, storedMetadata]
       );
-      return result.rows[0];
+      return hydrateMessageEmotion(result.rows[0]);
     } catch (err) {
       logger.error('Memory write failed', err?.message || err);
       return null;
@@ -107,7 +117,7 @@ function createMemoryStore(logger) {
       `DELETE FROM chat_messages
        WHERE user_key = $1 AND id = $2
        RETURNING id`,
-      [userKey(req), id]
+      [requestDatabaseUserKey(req), id]
     );
     return Boolean(result.rowCount);
   }
@@ -117,14 +127,19 @@ function createMemoryStore(logger) {
     const safeLimit = Math.max(1, Math.min(Number(limit) || historyLimit, 100));
     try {
       const result = await pool.query(
-        `SELECT id, role, model, content, created_at
-         FROM chat_messages
-         WHERE user_key = $1 AND conversation_id = $2
-         ORDER BY created_at DESC
+        `WITH ordered_messages AS (
+           SELECT id, role, model, content, emotion, metadata, created_at,
+                  ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS memory_sequence
+           FROM chat_messages
+           WHERE user_key = $1 AND conversation_id = $2
+         )
+         SELECT id, role, model, content, emotion, metadata, created_at, memory_sequence
+         FROM ordered_messages
+         ORDER BY created_at DESC, id DESC
          LIMIT $3`,
-        [userKey(req), conversationId, safeLimit]
+        [requestDatabaseUserKey(req), conversationId, safeLimit]
       );
-      return result.rows.reverse();
+      return result.rows.map(hydrateMessageEmotion).reverse();
     } catch (err) {
       logger.error('Memory read failed', err?.message || err);
       return [];
@@ -136,14 +151,19 @@ function createMemoryStore(logger) {
     const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 1000));
     try {
       const result = await pool.query(
-        `SELECT id, role, model, content, metadata, created_at
-         FROM chat_messages
-         WHERE user_key = $1 AND conversation_id = $2
-         ORDER BY created_at DESC
+        `WITH ordered_messages AS (
+           SELECT id, role, model, content, emotion, metadata, created_at,
+                  ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS memory_sequence
+           FROM chat_messages
+           WHERE user_key = $1 AND conversation_id = $2
+         )
+         SELECT id, role, model, content, emotion, metadata, created_at, memory_sequence
+         FROM ordered_messages
+         ORDER BY created_at DESC, id DESC
          LIMIT $3`,
-        [userKey(req), conversationId, safeLimit]
+        [requestDatabaseUserKey(req), conversationId, safeLimit]
       );
-      return result.rows.reverse();
+      return result.rows.map(hydrateMessageEmotion).reverse();
     } catch (err) {
       logger.error('Memory message read failed', err?.message || err);
       return [];
@@ -157,7 +177,7 @@ function createMemoryStore(logger) {
         `SELECT scope, summary, source_message_count, model, updated_at
          FROM memory_summaries
          WHERE user_key = $1`,
-        [userKey(req)]
+        [requestDatabaseUserKey(req)]
       );
       const summaries = defaultSummaries();
       for (const row of result.rows) {
@@ -187,7 +207,7 @@ function createMemoryStore(logger) {
          WHERE user_key = $1
          ORDER BY updated_at DESC
          LIMIT $2`,
-        [userKey(req), safeLimit]
+        [requestDatabaseUserKey(req), safeLimit]
       );
       return result.rows.map(row => ({
         id: row.id,
@@ -226,7 +246,7 @@ function createMemoryStore(logger) {
              source_message_id = EXCLUDED.source_message_id,
              updated_at = now()
          RETURNING id, fact_key, fact, category, confidence, model, source_message_id, created_at, updated_at`,
-        [userKey(req), factKey, fact.slice(0, 1000), category, confidence, model || null, sourceMessageId]
+        [requestDatabaseUserKey(req), factKey, fact.slice(0, 1000), category, confidence, model || null, sourceMessageId]
       );
       const row = result.rows[0];
       saved.push({
@@ -250,14 +270,14 @@ function createMemoryStore(logger) {
       `DELETE FROM memory_factoids
        WHERE user_key = $1 AND id = $2
        RETURNING id`,
-      [userKey(req), id]
+      [requestDatabaseUserKey(req), id]
     );
     return Boolean(result.rowCount);
   }
 
   async function clearAll({ req }) {
     if (!(await ensureReady())) throw new Error('Memory database unavailable');
-    const key = userKey(req);
+    const key = requestDatabaseUserKey(req);
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -285,13 +305,26 @@ function createMemoryStore(logger) {
         `SELECT COUNT(*)::int AS count
          FROM chat_messages
          WHERE user_key = $1 AND conversation_id = $2`,
-        [userKey(req), conversationId]
+        [requestDatabaseUserKey(req), conversationId]
       );
       return result.rows[0]?.count || 0;
     } catch (err) {
       logger.error('Memory count read failed', err?.message || err);
       return 0;
     }
+  }
+
+  async function getUnprocessedMessages({ req, summaries = null, limit = historyLimit, conversationId = 'default' }) {
+    if (!(await ensureReady())) return [];
+    const memorySummaries = summaries || await getSummaries({ req });
+    const messageCount = await getMessageCount({ req, conversationId });
+    const unprocessedCount = unprocessedMessageLimit({ summaries: memorySummaries, messageCount, limit });
+    if (unprocessedCount <= 0) return [];
+    return getMessages({
+      req,
+      conversationId,
+      limit: unprocessedCount
+    });
   }
 
   async function saveSummary({ req, scope, summary, sourceMessageCount, model }) {
@@ -306,7 +339,7 @@ function createMemoryStore(logger) {
            model = EXCLUDED.model,
            updated_at = now()
        RETURNING scope, summary, source_message_count, model, updated_at`,
-      [userKey(req), scope, summary, sourceMessageCount || 0, model || null]
+      [requestDatabaseUserKey(req), scope, summary, sourceMessageCount || 0, model || null]
     );
     const row = result.rows[0];
     return {
@@ -334,7 +367,7 @@ function createMemoryStore(logger) {
     if (!hasHistory && summaryRows.length === 0 && factRows.length === 0 && instructionRows.length === 0) return prompt;
 
     const transcript = (history || [])
-      .map(row => `${row.role === 'assistant' ? 'Assistant' : 'User'}: ${row.content}`)
+      .map(row => `${transcriptRoleLabel(row)}: ${row.content}`)
       .join('\n');
 
     const sections = [
@@ -381,7 +414,11 @@ function createMemoryStore(logger) {
     try {
       const limit = req.query.limit || historyLimit;
       const conversationId = req.query.conversationId || 'default';
-      const data = await getRecent({ req, limit, conversationId });
+      const [rows, summaries] = await Promise.all([
+        getRecent({ req, limit, conversationId }),
+        getSummaries({ req })
+      ]);
+      const data = annotateMemoryProcessed(rows, summaries);
       res.json({ ok: true, data });
     } catch (err) {
       logger.error('Memory history error', err?.message || err);
@@ -416,6 +453,7 @@ function createMemoryStore(logger) {
     getFactoids,
     getRecent,
     getMessages,
+    getUnprocessedMessages,
     getMessageCount,
     getSummaries,
     historyHandler,
@@ -423,8 +461,7 @@ function createMemoryStore(logger) {
     saveFactoids,
     saveSummary,
     shutdown,
-    summaryScopes: SUMMARY_SCOPES,
-    userKey
+    summaryScopes: SUMMARY_SCOPES
   };
 }
 
@@ -442,6 +479,57 @@ function defaultSummaries() {
   ]));
 }
 
+function emotionForMessage(role, metadata = {}) {
+  if (role !== 'assistant') return null;
+  const rawEmotion = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata.emotion
+    : '';
+  return rawEmotion ? normalizeBobEmotion(rawEmotion) : null;
+}
+
+function hydrateMessageEmotion(row) {
+  if (!row) return row;
+  const emotion = row.emotion || emotionForMessage(row.role, row.metadata);
+  const hydrated = {
+    ...row,
+    emotion,
+    metadata: emotion ? { ...(row.metadata || {}), emotion } : (row.metadata || {})
+  };
+  const memorySequence = Number(row.memory_sequence || row.memorySequence || 0);
+  if (memorySequence > 0) hydrated.memorySequence = memorySequence;
+  delete hydrated.memory_sequence;
+  return hydrated;
+}
+
+function annotateMemoryProcessed(rows = [], summaries = {}) {
+  const processedCount = Number(summaries.short?.sourceMessageCount || 0);
+  return (rows || []).map(row => {
+    const memorySequence = Number(row.memorySequence || row.memory_sequence || 0);
+    const memoryProcessed = memorySequence > 0 && memorySequence <= processedCount;
+    return {
+      ...row,
+      memoryProcessed,
+      metadata: {
+        ...(row.metadata || {}),
+        memoryProcessed
+      }
+    };
+  });
+}
+
+function transcriptRoleLabel(row = {}) {
+  if (row.role !== 'assistant') return 'User';
+  const emotion = row.emotion || row.metadata?.emotion;
+  return emotion ? `Assistant [emotion=${normalizeBobEmotion(emotion)}]` : 'Assistant';
+}
+
+function unprocessedMessageLimit({ summaries = {}, messageCount = 0, limit = DEFAULT_HISTORY_LIMIT } = {}) {
+  const processedCount = Number(summaries.short?.sourceMessageCount || 0);
+  const unprocessedCount = Math.max(0, Number(messageCount || 0) - processedCount);
+  const safeLimit = Math.max(1, Number(limit) || DEFAULT_HISTORY_LIMIT);
+  return Math.min(unprocessedCount, safeLimit);
+}
+
 function normalizeFactKey(value) {
   return String(value || '')
     .toLowerCase()
@@ -456,4 +544,13 @@ function clampConfidence(value) {
   return Math.max(0, Math.min(1, number));
 }
 
-module.exports = { SUMMARY_SCOPES, createMemoryStore, defaultSummaries };
+module.exports = {
+  SUMMARY_SCOPES,
+  annotateMemoryProcessed,
+  createMemoryStore,
+  defaultSummaries,
+  emotionForMessage,
+  hydrateMessageEmotion,
+  transcriptRoleLabel,
+  unprocessedMessageLimit
+};

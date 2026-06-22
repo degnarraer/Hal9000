@@ -2,9 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { actorFromReq, requestIp, summarize } = require('../server/securityEvents');
 
-test('actorFromReq prefers authenticated user identifiers', () => {
-  assert.equal(actorFromReq({ user: { email: 'person@example.com', sub: 'subject' } }), 'person@example.com');
-  assert.equal(actorFromReq({ user: { sub: 'subject' } }), 'subject');
+test('actorFromReq uses opaque subject keys instead of profile fields', () => {
+  const actor = actorFromReq({ user: { email: 'person@example.com', sub: 'subject' } });
+  assert.equal(typeof actor, 'string');
+  assert.notEqual(actor, 'person@example.com');
+  assert.notEqual(actor, 'subject');
+  assert.equal(actorFromReq({ user: { systemKey: 'public-route', name: 'public-route' } }), 'public-route');
   assert.equal(actorFromReq({}), 'anonymous');
 });
 

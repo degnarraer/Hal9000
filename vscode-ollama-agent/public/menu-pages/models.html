@@ -1,10 +1,30 @@
 <section class="panel-view">
+  <h3>Ollama Config</h3>
+  <div class="ollama-config-grid">
+    <label>
+      <span>Keep loaded</span>
+      <select id="ollamaKeepAlive">
+        <option value="0">Unload after response</option>
+        <option value="5m">5 minutes</option>
+        <option value="30m">30 minutes</option>
+        <option value="1h">1 hour</option>
+        <option value="-1">Keep loaded</option>
+      </select>
+    </label>
+    <div class="ollama-config-actions">
+      <button id="saveOllamaConfig" type="button">Save</button>
+    </div>
+  </div>
+  <div id="ollamaConfigStatus" class="model-status"></div>
+
+  <hr />
+
   <h3>Installed Models</h3>
   <div id="modelsList" class="models-list">Loading...</div>
 
   <hr />
 
-  <h3>Available Models from Ollama</h3>
+  <h3>Available Bob Models</h3>
   <div id="availableList" class="models-list">Loading...</div>
 
   <hr />

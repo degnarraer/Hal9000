@@ -23,7 +23,7 @@
         <div class="voice-strip" aria-label="Voice activity">
           <div class="voice-panel ai-voice">
             <div class="voice-label voice-label-row">
-              <span class="bob-voice-title">
+              <span class="bob-voice-title" id="bobMuteToggle" role="button" tabindex="0" aria-label="Mute Bob voice" aria-pressed="false" title="Mute Bob">
                 <span class="bob-face-shell" aria-hidden="true">
                   <svg id="bobFace" class="bob-face" viewBox="0 0 512 512">
                     <rect width="512" height="512" rx="96" fill="#020712"/>
@@ -73,10 +73,20 @@
                   <button type="button" data-speed-step="1" aria-label="Faster" title="Faster">
                     <i data-lucide="fast-forward"></i>
                   </button>
+                  <button id="stopBobSpeech" type="button" class="playback-stop" aria-label="Stop Bob speech" title="Stop">
+                    <i data-lucide="square"></i>
+                  </button>
                 </div>
               </div>
             </div>
             <canvas id="aiWaveform" width="420" height="80"></canvas>
+            <div class="bob-context-widget" aria-label="Ollama context usage">
+              <div class="bob-context-meta">
+                <span>CTX</span>
+                <small id="bobContextStatus">Checking context</small>
+              </div>
+              <canvas id="bobContextChart" width="420" height="54"></canvas>
+            </div>
           </div>
         </div>
         
@@ -122,6 +132,7 @@
 
   <script src="/vendor/lucide/lucide.min.js"></script>
   <script src="/bob-expression-engine.js"></script>
+  <script src="/voice-preferences.js"></script>
   <script src="/app.js"></script>
   <script src="/mic.js"></script>
   <script src="/menu/memory.js"></script>

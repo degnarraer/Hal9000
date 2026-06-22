@@ -1,0 +1,75 @@
+<section class="panel-view memory-requirements">
+  <div class="monitor-toolbar">
+    <h3>Bob's Memory Requirements</h3>
+    <button id="backToMemory" type="button">
+      <i data-lucide="arrow-left"></i>
+      Memory
+    </button>
+  </div>
+
+  <section class="monitor-card requirement-card">
+    <h4>Purpose</h4>
+    <p>Bob's Memory gives each signed-in user a private, inspectable memory layer that helps Bob answer the current message with useful context from prior conversations without replaying old chats or inventing profile details.</p>
+  </section>
+
+  <section class="monitor-card requirement-card">
+    <h4>User Outcomes</h4>
+    <ul>
+      <li>Memory is saved per authenticated user and never by display name or email.</li>
+      <li>The Memory page shows short, medium, and long summaries, learned factoids, and recent chat messages.</li>
+      <li>The user can refresh memory, delete individual messages, delete individual factoids, and wipe their own memory after typing WIPE.</li>
+      <li>Clearing the visible chat does not delete saved memory.</li>
+      <li>Processed chat stays inspectable in the Memory page but leaves Bob's prompt context after it has been merged into short-term memory.</li>
+      <li>Bob uses memory as background context for the current message only.</li>
+    </ul>
+  </section>
+
+  <section class="monitor-card requirement-card">
+    <h4>Memory Horizons</h4>
+    <dl class="requirement-list">
+      <div>
+        <dt>Short Term</dt>
+        <dd>Merges chat messages since the last memory update into current task state, immediate goals, preferences stated today, and unresolved next steps.</dd>
+      </div>
+      <div>
+        <dt>Medium Term</dt>
+        <dd>Merges existing medium-term memory with existing short-term memory.</dd>
+      </div>
+      <div>
+        <dt>Long Term</dt>
+        <dd>Merges existing long-term memory with existing medium-term memory.</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="monitor-card requirement-card">
+    <h4>Update Process</h4>
+    <ul>
+      <li>Bob updates memory as a cascade: long term, then medium term, then short term.</li>
+      <li>The cascade runs after configured chat-message thresholds or when estimated context pressure reaches the model-context trigger.</li>
+      <li>Context pressure counts summaries plus unprocessed chat, not the full saved chat log.</li>
+      <li>New memory is not allowed to replace better existing memory just because it is newer.</li>
+      <li>Saved memory size is bounded by the configured model context tokens, prompt reserve, trigger ratio, and max words for each horizon.</li>
+    </ul>
+  </section>
+
+  <section class="monitor-card requirement-card">
+    <h4>Safety Rules</h4>
+    <ul>
+      <li>Durable factoids must be supported by user-authored transcript text.</li>
+      <li>Bob must not infer sensitive attributes, secrets, credentials, medical facts, or financial account data.</li>
+      <li>If memory storage or summarization is unavailable, chat should continue and the UI should show a clear memory error.</li>
+      <li>Assistant emotion metadata is saved with assistant messages and can guide Bob's visible state.</li>
+    </ul>
+  </section>
+
+  <section class="monitor-card requirement-card">
+    <h4>Architecture Contract</h4>
+    <ul>
+      <li>The memory store owns persistence, schema setup, user scoping, CRUD, and prompt assembly.</li>
+      <li>The memory skill service owns cascading memory merges, factoid extraction, transcript formatting, context-pressure estimation, scheduling intervals, memory budgets, and duplicate job suppression.</li>
+      <li>Express route handlers stay thin and return normalized JSON.</li>
+      <li>Model-generated memory artifacts pass deterministic filters before persistence.</li>
+    </ul>
+  </section>
+</section>

@@ -43,36 +43,7 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Server Setup / Check Prerequisites",
-            "runtimeExecutable": "powershell",
-            "runtimeArgs": [
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/scripts/install-server.ps1",
-                "-CheckOnly"
-            ],
-            "cwd": "${workspaceFolder}",
-            "console": "integratedTerminal"
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "Server Setup / Install Prerequisites",
-            "runtimeExecutable": "powershell",
-            "runtimeArgs": [
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/scripts/install-server.ps1"
-            ],
-            "cwd": "${workspaceFolder}",
-            "console": "integratedTerminal"
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "Server Setup / Full Install",
+            "name": "Server Setup / Configure Server",
             "runtimeExecutable": "powershell",
             "runtimeArgs": [
                 "-ExecutionPolicy",
@@ -80,36 +51,6 @@
                 "-File",
                 "${workspaceFolder}/scripts/install-server.ps1",
                 "-Full"
-            ],
-            "cwd": "${workspaceFolder}",
-            "console": "integratedTerminal"
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "Server Setup / Install WSL for Docker",
-            "runtimeExecutable": "powershell",
-            "runtimeArgs": [
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/scripts/install-server.ps1",
-                "-InstallWsl"
-            ],
-            "cwd": "${workspaceFolder}",
-            "console": "integratedTerminal"
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "Server Setup / Install Prerequisites and Save PATH",
-            "runtimeExecutable": "powershell",
-            "runtimeArgs": [
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/scripts/install-server.ps1",
-                "-PersistPath"
             ],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal"
@@ -180,6 +121,20 @@
                 "Bypass",
                 "-Command",
                 "npm.cmd run public-site:check"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Secrets / Vaultwarden Secrets",
+            "runtimeExecutable": "powershell",
+            "runtimeArgs": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "npm.cmd run secrets:vault"
             ],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal"

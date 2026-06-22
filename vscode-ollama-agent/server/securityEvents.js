@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { databaseUserKey, systemUserKey } = require('./userIdentity');
 
 const RETENTION_DAYS = 30;
 
@@ -10,7 +11,12 @@ function requestIp(req = {}) {
 
 function actorFromReq(req = {}) {
   const user = req.user || {};
-  return user.email || user.preferred_username || user.upn || user.name || user.sub || 'anonymous';
+  if (user.systemKey) return systemUserKey(user.systemKey);
+  try {
+    return databaseUserKey(user);
+  } catch (err) {
+    return 'anonymous';
+  }
 }
 
 function createSecurityEventStore(logger) {

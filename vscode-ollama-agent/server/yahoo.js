@@ -1,11 +1,7 @@
 const crypto = require('crypto');
 const axios = require('axios');
 const { Pool } = require('pg');
-
-function userKey(req) {
-  const user = req.user || {};
-  return user.sub || user.email || user.preferred_username || user.name || 'anonymous';
-}
+const { requestDatabaseUserKey } = require('./userIdentity');
 
 function base64url(input) {
   return Buffer.from(input).toString('base64url');
@@ -138,7 +134,7 @@ function createYahooStore(logger) {
       `SELECT user_key, yahoo_guid, yahoo_email, display_name, scope, token_type, expires_at, raw_profile, created_at, updated_at
        FROM yahoo_oauth_accounts
        WHERE user_key = $1`,
-      [userKey(req)]
+      [requestDatabaseUserKey(req)]
     );
     const row = result.rows[0];
     if (!row) return null;
@@ -183,7 +179,7 @@ function createYahooStore(logger) {
            raw_profile = EXCLUDED.raw_profile,
            updated_at = now()`,
       [
-        userKey(req),
+        requestDatabaseUserKey(req),
         yahooGuid,
         yahooEmail,
         displayName,
@@ -202,14 +198,14 @@ function createYahooStore(logger) {
 
   async function disconnect(req) {
     if (!(await ensureReady())) throw new Error('Yahoo OAuth database unavailable');
-    await pool.query('DELETE FROM yahoo_oauth_accounts WHERE user_key = $1', [userKey(req)]);
+    await pool.query('DELETE FROM yahoo_oauth_accounts WHERE user_key = $1', [requestDatabaseUserKey(req)]);
   }
 
   async function refreshAccessToken(req) {
     if (!(await ensureReady())) throw new Error('Yahoo OAuth database unavailable');
     const result = await pool.query(
       'SELECT refresh_token_enc FROM yahoo_oauth_accounts WHERE user_key = $1',
-      [userKey(req)]
+      [requestDatabaseUserKey(req)]
     );
     const refreshToken = decrypt(result.rows[0]?.refresh_token_enc);
     if (!refreshToken) throw new Error('Yahoo refresh token is missing');
@@ -236,7 +232,7 @@ function createYahooStore(logger) {
 
     const nonce = crypto.randomBytes(16).toString('base64url');
     const state = signState({
-      userKey: userKey(req),
+      userKey: requestDatabaseUserKey(req),
       nonce,
       exp: Date.now() + 10 * 60 * 1000
     });
@@ -256,7 +252,7 @@ function createYahooStore(logger) {
       if (!configured()) throw new Error('Yahoo OAuth is not configured on this server');
       if (req.query.error) throw new Error(String(req.query.error_description || req.query.error));
       const state = verifyState(req.query.state);
-      if (state.userKey !== userKey(req)) throw new Error('Yahoo OAuth callback user mismatch');
+      if (state.userKey !== requestDatabaseUserKey(req)) throw new Error('Yahoo OAuth callback user mismatch');
       const code = String(req.query.code || '');
       if (!code) throw new Error('Yahoo OAuth code is missing');
 

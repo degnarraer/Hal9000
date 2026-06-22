@@ -24,7 +24,7 @@ async function runWebSearchSkillPage() {
 
   const model = localStorage.getItem('selectedModel') || document.getElementById('model')?.value;
   if (!model) {
-    if (status) status.textContent = 'Install or select an Ollama model before running this skill.';
+    if (status) status.textContent = 'Install or select a Bob model before running this skill.';
     return;
   }
 

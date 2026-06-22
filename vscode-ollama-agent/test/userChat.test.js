@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
 const { webcrypto } = require('node:crypto');
+const { databaseUserKey } = require('../server/userIdentity');
 
 const subtle = globalThis.crypto?.subtle || webcrypto.subtle;
 const getRandomValues = bytes => (globalThis.crypto || webcrypto).getRandomValues(bytes);
@@ -26,9 +27,11 @@ function withMockPg(handler) {
   class MockPool {
     constructor() {
       this.messages = [];
+      const aliceKey = databaseUserKey({ sub: 'alice' });
+      const bobKey = databaseUserKey({ sub: 'bob' });
       this.keys = new Map([
-        ['alice', { user_key: 'alice', public_key_jwk: { kty: 'EC', crv: 'P-256', x: 'alice-x', y: 'alice-y' } }],
-        ['bob', { user_key: 'bob', public_key_jwk: { kty: 'EC', crv: 'P-256', x: 'bob-x', y: 'bob-y' } }]
+        [aliceKey, { user_key: aliceKey, public_key_jwk: { kty: 'EC', crv: 'P-256', x: 'alice-x', y: 'alice-y' } }],
+        [bobKey, { user_key: bobKey, public_key_jwk: { kty: 'EC', crv: 'P-256', x: 'bob-x', y: 'bob-y' } }]
       ]);
       pools.push(this);
     }
@@ -88,7 +91,7 @@ test('user chat service stores and returns encrypted payloads without plaintext'
     await store.sendMessage({
       user: { sub: 'alice', email: 'alice@example.com' },
       body: {
-        recipientKey: 'bob',
+        recipientKey: databaseUserKey({ sub: 'bob' }),
         ciphertext: 'base64-ciphertext-only',
         iv: 'base64-iv'
       }
@@ -120,7 +123,7 @@ test('user chat service rejects unencrypted message submissions', async () => {
     const res = response();
     await store.sendMessage({
       user: { sub: 'alice' },
-      body: { recipientKey: 'bob', text: 'hello in plaintext' }
+      body: { recipientKey: databaseUserKey({ sub: 'bob' }), text: 'hello in plaintext' }
     }, res);
 
     assert.equal(res.code, 400);
