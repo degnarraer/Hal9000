@@ -10,7 +10,7 @@ const DEFAULT_MEMORY_SUMMARY_INTERVALS = {
 
 const DEFAULT_MEMORY_BUDGET = {
   modelContextTokens: 4096,
-  triggerRatio: 0.72,
+  triggerRatio: 0.5,
   promptReserveTokens: 1200,
   maxWords: {
     short: 120,
@@ -64,11 +64,24 @@ function transcriptFromMessages(messages = []) {
         content: String(row?.content || '')
       };
       if (role === 'assistant') {
-        return {
+        const responseFactoids = Array.isArray(row?.metadata?.responseFactoids)
+          ? row.metadata.responseFactoids
+          : Array.isArray(row?.responseFactoids)
+            ? row.responseFactoids
+            : [];
+        const output = {
           ...base,
           assistantEmotion: String(row?.assistantEmotion || row?.emotion || row?.metadata?.emotion || 'neutral'),
           assistantEmotionIntensity: normalizeEmotionIntensity(row?.assistantEmotionIntensity ?? row?.metadata?.assistantEmotionIntensity ?? row?.metadata?.emotionIntensity)
         };
+        const normalizedFactoids = responseFactoids.map(item => ({
+            factKey: String(item?.factKey || item?.key || '').trim(),
+            category: String(item?.category || 'general').trim() || 'general',
+            fact: String(item?.fact || item?.value || '').trim(),
+            confidence: normalizeEmotionIntensity(item?.confidence)
+          })).filter(item => item.fact);
+        if (normalizedFactoids.length > 0) output.responseFactoids = normalizedFactoids;
+        return output;
       }
       if (role === 'user') {
         return {
@@ -151,7 +164,6 @@ function createMemorySkillService({
   generateText,
   intervals = DEFAULT_MEMORY_SUMMARY_INTERVALS,
   budget,
-  backgroundFactoids = false,
   getErrorText = defaultErrorText,
   userKeyForRequest = requestDatabaseUserKey,
   onMemoryChanged = null
@@ -195,15 +207,18 @@ function createMemorySkillService({
       memory.getMessageCount({ req, conversationId })
     ]);
 
-    const shortSourceCount = Number(summaries.short?.sourceMessageCount || 0);
-    const newMessageCount = Math.max(0, messageCount - shortSourceCount);
-    const newMessages = newMessageCount > 0
-      ? await memory.getMessages({ req, limit: Math.min(newMessageCount, memory.summaryScopes.short?.limit || newMessageCount), conversationId })
-      : [];
+    const shortLimit = memory.summaryScopes.short?.limit || 24;
+    const newMessages = typeof memory.getUnprocessedMessages === 'function'
+      ? await memory.getUnprocessedMessages({ req, summaries, limit: shortLimit, conversationId })
+      : await legacyUnprocessedMessages({ req, summaries, messageCount, conversationId, limit: shortLimit });
     const deltaTranscript = transcriptFromMessages(newMessages);
 
     const result = {};
-    if (selectedScopes.has('long')) {
+    const hasLongInput = Boolean(String(summaries.medium?.summary || '').trim());
+    const hasMediumInput = Boolean(String(summaries.short?.summary || '').trim());
+    const hasShortInput = newMessages.length > 0;
+
+    if (selectedScopes.has('long') && hasLongInput) {
       result.long = await mergeSummary({
         req,
         model,
@@ -215,7 +230,7 @@ function createMemorySkillService({
       });
     }
 
-    if (selectedScopes.has('medium')) {
+    if (selectedScopes.has('medium') && hasMediumInput) {
       result.medium = await mergeSummary({
         req,
         model,
@@ -227,7 +242,7 @@ function createMemorySkillService({
       });
     }
 
-    if (selectedScopes.has('short')) {
+    if (selectedScopes.has('short') && hasShortInput) {
       result.short = await mergeSummary({
         req,
         model,
@@ -237,9 +252,57 @@ function createMemorySkillService({
         incomingLabel: 'chat messages since the last memory update',
         sourceMessageCount: messageCount
       });
+      result.factoids = await refreshFactoidsFromMessages({
+        req,
+        model,
+        conversationId,
+        messages: newMessages,
+        sourceMessageId: newMessages[newMessages.length - 1]?.id || null
+      });
+      if (typeof memory.markMessagesMerged === 'function') {
+        result.short.mergedMessageCount = await memory.markMessagesMerged({
+          req,
+          messageIds: newMessages.map(message => message.id)
+        });
+      }
     }
 
     return result;
+  }
+
+  async function legacyUnprocessedMessages({ req, summaries, messageCount, conversationId, limit }) {
+    const shortSourceCount = Number(summaries.short?.sourceMessageCount || 0);
+    const newMessageCount = Math.max(0, messageCount - shortSourceCount);
+    if (newMessageCount <= 0) return [];
+    return memory.getMessages({
+      req,
+      limit: Math.min(newMessageCount, limit || newMessageCount),
+      conversationId
+    });
+  }
+
+  function cascadeJobKey({ req, conversationId = 'default' }) {
+    return `${userKeyForRequest(req)}:${conversationId}:summary-cascade`;
+  }
+
+  function requestCascadeUpdate({ req, model, conversationId = 'default', scopes = ['long', 'medium', 'short'], reason = 'manual' }) {
+    const jobKey = cascadeJobKey({ req, conversationId });
+    if (summaryJobs.has(jobKey)) return Promise.resolve({ skipped: true, reason: 'already-running' });
+
+    summaryJobs.add(jobKey);
+    onMemoryChanged?.({ req, type: 'memory-merge-started', count: 1 });
+    return runCascadeUpdate({ req, model, conversationId, scopes })
+      .then(result => {
+        logger?.info?.(`Memory cascade refreshed (${reason})`);
+        onMemoryChanged?.({ req, type: 'memory-merge-complete', count: Object.keys(result || {}).length });
+        return result;
+      })
+      .catch(err => {
+        logger?.warn?.(`Memory cascade refresh failed (${reason})`, getErrorText(err));
+        onMemoryChanged?.({ req, type: 'memory-merge-error', count: 1 });
+        throw err;
+      })
+      .finally(() => summaryJobs.delete(jobKey));
   }
 
   async function mergeSummary({ req, model, scope, existingSummary, incomingMemory, incomingLabel, sourceMessageCount }) {
@@ -294,26 +357,26 @@ function createMemorySkillService({
 
       if (!isDueByMessages && !isDueByContext) return;
 
-      const jobKey = `${userKeyForRequest(req)}:${conversationId}:summary-cascade`;
-      if (summaryJobs.has(jobKey)) return;
-
-      summaryJobs.add(jobKey);
-      runCascadeUpdate({ req, model, conversationId, scopes: isDueByContext ? ['long', 'medium', 'short'] : dueScopes })
-        .then(() => logger?.info?.(`Memory cascade refreshed from ${messageCount} messages`))
-        .catch(err => logger?.warn?.('Memory cascade refresh failed', getErrorText(err)))
-        .finally(() => summaryJobs.delete(jobKey));
+      requestCascadeUpdate({
+        req,
+        model,
+        conversationId,
+        scopes: isDueByContext ? ['long', 'medium', 'short'] : dueScopes,
+        reason: isDueByContext ? `context-pressure-${messageCount}-messages` : `message-interval-${messageCount}-messages`
+      }).catch(() => {});
     } catch (err) {
       logger?.warn?.('Memory summary scheduler failed', getErrorText(err));
     }
   }
 
-  async function updateFactoidsAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null }) {
+  async function refreshFactoidsFromMessages({ req, model, conversationId = 'default', messages = [], sourceMessageId = null }) {
+    if (!Array.isArray(messages) || messages.length === 0) return [];
+    if (typeof memory.saveFactoids !== 'function') return [];
     const jobKey = `${userKeyForRequest(req)}:${conversationId}:factoids`;
-    if (factoidJobs.has(jobKey)) return;
+    if (factoidJobs.has(jobKey)) return [];
 
     factoidJobs.add(jobKey);
     try {
-      const messages = await memory.getMessages({ req, limit: 16, conversationId });
       const transcript = transcriptFromMessages(messages);
       const text = await generateText(model, buildFactoidExtractionPrompt(transcript), { temperature: 0.1 }, { reason: 'memory-factoids' });
       const saved = await memory.saveFactoids({
@@ -323,19 +386,27 @@ function createMemorySkillService({
         factoids: filterSupportedFactoids(parseFactoidExtraction(text), messages)
       });
       if (saved.length > 0) {
-        logger?.info?.(`Memory factoids refreshed: ${saved.length} saved`);
+        logger?.info?.(`Memory factoids refreshed during merge: ${saved.length} saved`);
         onMemoryChanged?.({ req, type: 'factoids', count: saved.length });
       }
+      return saved;
     } catch (err) {
       logger?.warn?.('Memory factoid refresh failed', getErrorText(err));
+      return [];
     } finally {
       factoidJobs.delete(jobKey);
     }
   }
 
-  function updateAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null, refreshFactoids = backgroundFactoids } = {}) {
+  async function updateFactoidsAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null }) {
+    const messages = typeof memory.getUnprocessedMessages === 'function'
+      ? await memory.getUnprocessedMessages({ req, limit: memory.summaryScopes.short?.limit || 24, conversationId })
+      : await memory.getMessages({ req, limit: 16, conversationId });
+    return refreshFactoidsFromMessages({ req, model, conversationId, messages, sourceMessageId });
+  }
+
+  function updateAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null } = {}) {
     updateSummariesAfterTurn({ req, model, conversationId });
-    if (refreshFactoids) updateFactoidsAfterTurn({ req, model, conversationId, sourceMessageId });
   }
 
   function isUpdating({ req, conversationId = 'default' } = {}) {
@@ -348,6 +419,7 @@ function createMemorySkillService({
     budget: memoryBudget,
     isUpdating,
     refreshSummary,
+    requestCascadeUpdate,
     runCascadeUpdate,
     updateAfterTurn,
     updateFactoidsAfterTurn,

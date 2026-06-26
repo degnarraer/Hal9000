@@ -35,10 +35,12 @@ function createMemoryStore(logger) {
         content TEXT NOT NULL,
         emotion TEXT,
         metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        memory_merged BOOLEAN NOT NULL DEFAULT false,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
     await pool.query('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS emotion TEXT');
+    await pool.query('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS memory_merged BOOLEAN NOT NULL DEFAULT false');
     await pool.query(`
       UPDATE chat_messages
       SET emotion = lower(metadata->>'emotion')
@@ -46,6 +48,29 @@ function createMemoryStore(logger) {
         AND emotion IS NULL
         AND metadata ? 'emotion'
         AND metadata->>'emotion' <> ''
+    `);
+    await pool.query(`
+      WITH short_summary AS (
+        SELECT user_key, source_message_count
+        FROM memory_summaries
+        WHERE scope = 'short'
+      ),
+      sequenced AS (
+        SELECT chat_messages.id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY chat_messages.user_key, chat_messages.conversation_id
+                 ORDER BY chat_messages.created_at ASC, chat_messages.id ASC
+               ) AS memory_sequence,
+               short_summary.source_message_count
+        FROM chat_messages
+        JOIN short_summary ON short_summary.user_key = chat_messages.user_key
+        WHERE chat_messages.memory_merged = false
+      )
+      UPDATE chat_messages
+      SET memory_merged = true
+      FROM sequenced
+      WHERE chat_messages.id = sequenced.id
+        AND sequenced.memory_sequence <= sequenced.source_message_count
     `);
     await pool.query('CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created ON chat_messages (user_key, created_at DESC)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_created ON chat_messages (user_key, conversation_id, created_at DESC)');
@@ -104,7 +129,7 @@ function createMemoryStore(logger) {
       const result = await pool.query(
         `INSERT INTO chat_messages (user_key, conversation_id, role, model, content, emotion, metadata)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, role, model, content, emotion, metadata, created_at`,
+         RETURNING id, role, model, content, emotion, metadata, memory_merged, created_at`,
         [requestDatabaseUserKey(req), conversationId, role, model || null, content, emotion, storedMetadata]
       );
       return hydrateMessageEmotion(result.rows[0]);
@@ -125,18 +150,33 @@ function createMemoryStore(logger) {
     return Boolean(result.rowCount);
   }
 
+  async function markMessagesMerged({ req, messageIds = [] }) {
+    if (!(await ensureReady())) throw new Error('Memory database unavailable');
+    const ids = [...new Set((messageIds || []).map(id => Number(id)).filter(Number.isFinite))];
+    if (ids.length === 0) return 0;
+    const result = await pool.query(
+      `UPDATE chat_messages
+       SET memory_merged = true,
+           metadata = COALESCE(metadata, '{}'::jsonb) || '{"memoryProcessed": true, "memoryMerged": true}'::jsonb
+       WHERE user_key = $1 AND id = ANY($2::bigint[])
+       RETURNING id`,
+      [requestDatabaseUserKey(req), ids]
+    );
+    return result.rowCount || 0;
+  }
+
   async function getRecent({ req, limit = historyLimit, conversationId = 'default' }) {
     if (!(await ensureReady())) return [];
     const safeLimit = Math.max(1, Math.min(Number(limit) || historyLimit, 100));
     try {
       const result = await pool.query(
         `WITH ordered_messages AS (
-           SELECT id, role, model, content, emotion, metadata, created_at,
+           SELECT id, role, model, content, emotion, metadata, memory_merged, created_at,
                   ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS memory_sequence
            FROM chat_messages
            WHERE user_key = $1 AND conversation_id = $2
          )
-         SELECT id, role, model, content, emotion, metadata, created_at, memory_sequence
+         SELECT id, role, model, content, emotion, metadata, memory_merged, created_at, memory_sequence
          FROM ordered_messages
          ORDER BY created_at DESC, id DESC
          LIMIT $3`,
@@ -155,12 +195,12 @@ function createMemoryStore(logger) {
     try {
       const result = await pool.query(
         `WITH ordered_messages AS (
-           SELECT id, role, model, content, emotion, metadata, created_at,
+           SELECT id, role, model, content, emotion, metadata, memory_merged, created_at,
                   ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS memory_sequence
            FROM chat_messages
            WHERE user_key = $1 AND conversation_id = $2
          )
-         SELECT id, role, model, content, emotion, metadata, created_at, memory_sequence
+         SELECT id, role, model, content, emotion, metadata, memory_merged, created_at, memory_sequence
          FROM ordered_messages
          ORDER BY created_at DESC, id DESC
          LIMIT $3`,
@@ -320,15 +360,29 @@ function createMemoryStore(logger) {
 
   async function getUnprocessedMessages({ req, summaries = null, limit = historyLimit, conversationId = 'default' }) {
     if (!(await ensureReady())) return [];
-    const memorySummaries = summaries || await getSummaries({ req });
-    const messageCount = await getMessageCount({ req, conversationId });
-    const unprocessedCount = unprocessedMessageLimit({ summaries: memorySummaries, messageCount, limit });
-    if (unprocessedCount <= 0) return [];
-    return getMessages({
-      req,
-      conversationId,
-      limit: unprocessedCount
-    });
+    const safeLimit = Math.max(1, Math.min(Number(limit) || historyLimit, 1000));
+    try {
+      const result = await pool.query(
+        `WITH ordered_messages AS (
+           SELECT id, role, model, content, emotion, metadata, memory_merged, created_at,
+                  ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS memory_sequence
+           FROM chat_messages
+           WHERE user_key = $1
+             AND conversation_id = $2
+             AND memory_merged = false
+           ORDER BY created_at DESC, id DESC
+           LIMIT $3
+         )
+         SELECT id, role, model, content, emotion, metadata, memory_merged, created_at, memory_sequence
+         FROM ordered_messages
+         ORDER BY created_at ASC, id ASC`,
+        [requestDatabaseUserKey(req), conversationId, safeLimit]
+      );
+      return result.rows.map(hydrateMessageEmotion);
+    } catch (err) {
+      logger.error('Memory unmerged message read failed', err?.message || err);
+      return [];
+    }
   }
 
   async function saveSummary({ req, scope, summary, sourceMessageCount, model, debug = {} }) {
@@ -429,7 +483,7 @@ function createMemoryStore(logger) {
         getSummaries({ req }),
         getFactoids({ req, limit: req.query.factoidLimit || 100 })
       ]);
-      res.json({ ok: true, data: { messages, summaries, factoids } });
+      res.json({ ok: true, data: { messages: [...messages].reverse(), summaries, factoids } });
     } catch (err) {
       logger.error('Memory manager error', err?.message || err);
       res.status(500).json({ ok: false, error: 'Memory manager unavailable' });
@@ -450,6 +504,7 @@ function createMemoryStore(logger) {
     getRecent,
     getMessages,
     getUnprocessedMessages,
+    markMessagesMerged,
     getMessageCount,
     getSummaries,
     historyHandler,
@@ -493,7 +548,16 @@ function hydrateMessageEmotion(row) {
   };
   const memorySequence = Number(row.memory_sequence || row.memorySequence || 0);
   if (memorySequence > 0) hydrated.memorySequence = memorySequence;
+  const memoryMerged = Boolean(row.memory_merged ?? row.memoryMerged ?? row.memoryProcessed ?? row.metadata?.memoryMerged ?? row.metadata?.memoryProcessed);
+  hydrated.memoryMerged = memoryMerged;
+  hydrated.memoryProcessed = memoryMerged;
+  hydrated.metadata = {
+    ...(hydrated.metadata || {}),
+    memoryMerged,
+    memoryProcessed: memoryMerged
+  };
   delete hydrated.memory_sequence;
+  delete hydrated.memory_merged;
   return hydrated;
 }
 
@@ -501,12 +565,14 @@ function annotateMemoryProcessed(rows = [], summaries = {}) {
   const processedCount = Number(summaries.short?.sourceMessageCount || 0);
   return (rows || []).map(row => {
     const memorySequence = Number(row.memorySequence || row.memory_sequence || 0);
-    const memoryProcessed = memorySequence > 0 && memorySequence <= processedCount;
+    const memoryProcessed = Boolean(row.memoryMerged ?? row.memory_merged ?? row.memoryProcessed) || (memorySequence > 0 && memorySequence <= processedCount);
     return {
       ...row,
+      memoryMerged: memoryProcessed,
       memoryProcessed,
       metadata: {
         ...(row.metadata || {}),
+        memoryMerged: memoryProcessed,
         memoryProcessed
       }
     };

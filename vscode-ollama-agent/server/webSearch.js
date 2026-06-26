@@ -2,6 +2,11 @@ const axios = require('axios');
 
 const DEFAULT_SEARCH_URL = 'https://duckduckgo.com/html/';
 const SEARCH_TRIGGER_RE = /\b(search|look\s+up|web\s+search|internet|online|latest|current|today|news)\b/i;
+const USER_FACTOID_PATTERNS = [
+  { regex: /\bI\s+(?:really\s+)?(?:want|need|would like)\s+(?:to\s+buy\s+|to\s+get\s+)?([^.!?\n,;]+)/gi, category: 'preference', verb: 'wants' },
+  { regex: /\bI(?:'m| am)\s+looking\s+for\s+([^.!?\n,;]+)/gi, category: 'preference', verb: 'is looking for' },
+  { regex: /\bI\s+(?:like|prefer)\s+([^.!?\n,;]+)/gi, category: 'preference', verb: 'prefers' }
+];
 
 function stripHtml(value) {
   return String(value || '')
@@ -40,6 +45,46 @@ function extractSearchQuery(prompt) {
     .replace(/\s+and$/i, '')
     .replace(/\s+/g, ' ')
     .trim() || text;
+}
+
+function normalizeFactKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'user-preference';
+}
+
+function cleanFactObject(value) {
+  return String(value || '')
+    .replace(/\b(?:please\s+)?(?:search|look\s+up|find|show|recommend|tell\s+me\s+about)\b.*$/i, '')
+    .replace(/\b(?:for me|online|on the web|on the internet)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.?!,;:]+$/g, '')
+    .trim();
+}
+
+function extractUserPromptFactoids(prompt) {
+  const text = String(prompt || '').trim();
+  const factoids = [];
+  const seen = new Set();
+
+  for (const { regex, category, verb } of USER_FACTOID_PATTERNS) {
+    regex.lastIndex = 0;
+    for (const match of text.matchAll(regex)) {
+      const object = cleanFactObject(match[1]);
+      if (!object || object.length < 2 || object.length > 120) continue;
+      if (/^(what|why|how|when|where|who)\b/i.test(object)) continue;
+      const fact = `The user ${verb} ${object}.`;
+      const factKey = normalizeFactKey(`${category}-${verb}-${object}`);
+      if (seen.has(factKey)) continue;
+      seen.add(factKey);
+      factoids.push({ factKey, category, fact, confidence: 0.9 });
+    }
+  }
+
+  return factoids;
 }
 
 function parseDuckDuckGoResults(html, limit = 5) {
@@ -104,6 +149,7 @@ function buildWebSummaryPrompt(userPrompt, query, results) {
     'response: write a helpful 3-5 sentence synthesis, not a numbered search-results dump.',
     'response should answer the user directly with the most useful facts from the snippets.',
     'factoids: durable user facts explicitly supported by the user prompt; use [] when no new durable fact appears.',
+    'Extract user intent and preferences from the prompt even when the answer requires web sources. Example: "I want a truck" => {"factKey":"preference-wants-truck","category":"preference","fact":"The user wants a truck.","confidence":0.9}.',
     'Each factoid must use factKey, category, fact, and confidence. Do not infer sensitive facts or facts not stated by the user.',
     'ONLY use facts literally present in <search_results>. Do not add dates, names, locations, attractions, claims, or examples unless they appear in the snippets.',
     'Mention uncertainty when snippets are thin. Do not invent facts beyond the snippets.',
@@ -167,6 +213,7 @@ function hasUnsupportedWebClaims(response, results = []) {
 
 module.exports = {
   buildWebFallbackResponse,
+  extractUserPromptFactoids,
   hasUnsupportedWebClaims,
   shouldSearchWeb,
   extractSearchQuery,

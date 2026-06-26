@@ -26,6 +26,24 @@ test('transcriptFromMessages creates chatHistory memory JSON', () => {
   );
 });
 
+test('transcriptFromMessages includes response factoids captured on chat rows', () => {
+  const transcript = transcriptFromMessages([
+    {
+      role: 'assistant',
+      content: 'Nice to meet you.',
+      metadata: {
+        emotion: 'happy',
+        responseFactoids: [
+          { factKey: 'name', category: 'identity', fact: 'The user is named Rob.', confidence: 0.87 }
+        ]
+      }
+    }
+  ]);
+
+  assert.match(transcript, /"responseFactoids"/);
+  assert.match(transcript, /"fact": "The user is named Rob\."/);
+});
+
 test('buildFactoidExtractionPrompt forbids unsupported sensitive inference', () => {
   const prompt = buildFactoidExtractionPrompt('User: My name is Rob.');
 
@@ -174,6 +192,56 @@ test('memory skill factoid refresh persists only transcript-supported facts', as
   assert.equal(savedPayload.sourceMessageId, 42);
   assert.deepEqual(savedPayload.factoids, [
     { factKey: 'name', category: 'identity', fact: 'The user is named Rob.', confidence: 0.8 }
+  ]);
+});
+
+test('memory skill extracts factoids during memory merge', async () => {
+  let savedPayload;
+  const mergedIds = [];
+  const messages = [
+    { id: 10, role: 'user', content: 'My name is Rob.' },
+    { id: 11, role: 'assistant', content: 'Nice to meet you.' }
+  ];
+  const memory = {
+    summaryScopes: { short: { limit: 24 }, medium: { limit: 100 }, long: { limit: 500 } },
+    getSummaries: async () => ({
+      short: { summary: '', sourceMessageCount: 0 },
+      medium: { summary: '', sourceMessageCount: 0 },
+      long: { summary: '', sourceMessageCount: 0 }
+    }),
+    getMessageCount: async () => messages.length,
+    getUnprocessedMessages: async () => messages,
+    saveSummary: async payload => payload,
+    markMessagesMerged: async payload => {
+      mergedIds.push(...payload.messageIds);
+      return payload.messageIds.length;
+    },
+    saveFactoids: async payload => {
+      savedPayload = payload;
+      return payload.factoids;
+    }
+  };
+  const service = createMemorySkillService({
+    memory,
+    logger: {},
+    userKeyForRequest: () => 'user-1',
+    generateText: async (model, prompt) => prompt.includes('factoid extraction')
+      ? JSON.stringify({
+        factoids: [
+          { factKey: 'name', category: 'identity', fact: 'The user is named Rob.', confidence: 0.9 },
+          { factKey: 'office', category: 'environment', fact: 'The user works in a quiet office.', confidence: 0.8 }
+        ]
+      })
+      : '- The user introduced themself as Rob.'
+  });
+
+  await service.runCascadeUpdate({ req: {}, model: 'llama3', conversationId: 'main' });
+
+  assert.deepEqual(mergedIds, [10, 11]);
+  assert.equal(savedPayload.model, 'llama3');
+  assert.equal(savedPayload.sourceMessageId, 11);
+  assert.deepEqual(savedPayload.factoids, [
+    { factKey: 'name', category: 'identity', fact: 'The user is named Rob.', confidence: 0.9 }
   ]);
 });
 
@@ -393,7 +461,7 @@ test('memory skill reports active update jobs for the current user conversation'
   assert.equal(service.isUpdating({ req, conversationId: 'main' }), false);
 });
 
-test('memory skill does not run background factoid sweep after every turn unless enabled', async () => {
+test('memory skill does not run factoid sweep after every turn', async () => {
   let factoidReads = 0;
   const memory = {
     summaryScopes: {},
@@ -421,14 +489,13 @@ test('memory skill does not run background factoid sweep after every turn unless
   const enabledService = createMemorySkillService({
     memory,
     logger: {},
-    backgroundFactoids: true,
     userKeyForRequest: () => 'user-1',
     generateText: async () => '{"factoids":[]}'
   });
 
   enabledService.updateAfterTurn({ req: {}, model: 'llama3', conversationId: 'main' });
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(factoidReads, 1);
+  assert.equal(factoidReads, 0);
 });
 
 test('memory budget normalizes model context and horizon word caps', () => {

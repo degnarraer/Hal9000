@@ -4,8 +4,10 @@ const send = document.getElementById('send');
 const clearChat = document.getElementById('clearChat');
 const modelSelect = document.getElementById('model');
 const refreshModels = document.getElementById('refreshModels');
-const defaultModel = 'llama2';
+const defaultModel = 'AUTO';
 const selectedModelKey = 'selectedModel';
+const selectedModelVersionKey = 'selectedModelVersion';
+const selectedModelVersion = '2';
 const visibleChatClearedAtKey = 'visibleChatClearedAt';
 const bobMutedKey = 'bobVoiceMuted';
 let currentAudio;
@@ -25,6 +27,9 @@ let streamingSpeechGeneration = 0;
 let ttsUnavailableReason = '';
 const ANALYZED_TTS_FOR_CHAT = true;
 let chatUserIsAdmin = false;
+let memoryInteractionTimer;
+let memoryInteractionLastSent = 0;
+let bobMemoryEventSource;
 
 const aiWaveform = document.getElementById('aiWaveform');
 const bobContextCanvas = document.getElementById('bobContextChart');
@@ -119,6 +124,15 @@ function memoryMessageEmotion(message = {}) {
   return `${label || 'neutral'} (${Number.isFinite(normalized) ? normalized.toFixed(2) : '0.00'})`;
 }
 
+function memoryMessageFactoids(message = {}) {
+  return Array.isArray(message.metadata?.responseFactoids) ? message.metadata.responseFactoids : [];
+}
+
+function memoryFactoidTitle(factoids = []) {
+  if (!factoids.length) return '';
+  return factoids.map(item => `${item.category || 'general'}: ${item.fact || ''}`).join('\n');
+}
+
 function memorySummaryCard(scope, summary = {}) {
   return `
     <section class="bob-memory-section bob-memory-summary ${scope}">
@@ -139,10 +153,16 @@ function memoryDialogHtml(data = {}) {
   const summaries = data.summaries || {};
   const messageRows = messages.length ? messages.map(message => `
     <div class="bob-memory-row ${escapeDialogHtml(message.role || 'user')}">
+      <span class="bob-memory-row-merge ${message.memoryMerged || message.memoryProcessed || message.metadata?.memoryMerged || message.metadata?.memoryProcessed ? 'merged' : ''}" title="${message.memoryMerged || message.memoryProcessed || message.metadata?.memoryMerged || message.metadata?.memoryProcessed ? 'Merged into memory' : 'Not merged yet'}">
+        ${message.memoryMerged || message.memoryProcessed || message.metadata?.memoryMerged || message.metadata?.memoryProcessed ? '<i data-lucide="brain"></i>' : ''}
+      </span>
       <strong>${escapeDialogHtml(memoryRoleLabel(message.role))}</strong>
       <span>${escapeDialogHtml(message.model || 'no model')}</span>
       <time>${escapeDialogHtml(memoryDate(message.dateTime || message.created_at || message.createdAt))}</time>
       <span>${escapeDialogHtml(memoryMessageEmotion(message))}</span>
+      <span class="bob-memory-row-factoids ${memoryMessageFactoids(message).length ? 'has-factoids' : ''}" title="${escapeDialogHtml(memoryFactoidTitle(memoryMessageFactoids(message)))}">
+        ${memoryMessageFactoids(message).length ? `<i data-lucide="list-plus"></i>${memoryMessageFactoids(message).length}` : ''}
+      </span>
       <p>${escapeDialogHtml(message.content || '')}</p>
     </div>
   `).join('') : '<div class="bob-memory-empty">No chat memory recorded.</div>';
@@ -163,6 +183,10 @@ function memoryDialogHtml(data = {}) {
       <div class="bob-memory-header">
         <span class="bob-memory-mark"><i data-lucide="brain"></i></span>
         <h2 id="bobMemoryTitle">Bob Memory</h2>
+        <button class="bob-memory-merge" type="button" aria-label="Merge Bob memory" title="Merge Bob memory">
+          <i data-lucide="combine"></i>
+          Merge Memory
+        </button>
         <button class="bob-memory-wipe" type="button" aria-label="Wipe Bob memory" title="Wipe Bob memory">
           <i data-lucide="database-zap"></i>
           Wipe Memory
@@ -245,6 +269,34 @@ async function fetchBobMemoryDialogData() {
 
 function attachBobMemoryDialogEvents(overlay, close) {
   overlay.querySelector('.bob-memory-close')?.addEventListener('click', close);
+  overlay.querySelector('.bob-memory-merge')?.addEventListener('click', async () => {
+    const button = overlay.querySelector('.bob-memory-merge');
+    button?.setAttribute('disabled', 'disabled');
+    setBobMemoryMerging(true);
+    try {
+      const response = await fetch('/api/memory/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: modelSelect?.value || undefined, reason: 'brain-dialog' })
+      });
+      const json = await response.json();
+      if (!json.ok) throw new Error(json.error || 'Could not merge memory');
+      const data = await fetchBobMemoryDialogData();
+      overlay.innerHTML = memoryDialogHtml(data);
+      attachBobMemoryDialogEvents(overlay, close);
+      renderIcons(overlay);
+      window.dispatchEvent(new CustomEvent('hal:memory-changed'));
+    } catch (err) {
+      window.__dialog?.alert?.({
+        title: 'Memory Merge Failed',
+        message: err.message,
+        danger: true
+      });
+    } finally {
+      setBobMemoryMerging(false);
+      button?.removeAttribute('disabled');
+    }
+  });
   overlay.querySelector('.bob-memory-wipe')?.addEventListener('click', async () => {
     const button = overlay.querySelector('.bob-memory-wipe');
     const confirmed = await confirmBobMemoryWipe();
@@ -668,11 +720,23 @@ async function clearVisibleChat() {
   if (!messagesEl.children.length) return;
   const shouldClear = await window.__dialog.confirm({
     title: 'Clear Chat',
-    message: 'Clear the visible chat? Saved memory is not deleted.',
+    message: 'Merge Bob memory, then clear the visible chat?',
     confirmText: 'Clear',
     danger: true
   });
   if (!shouldClear) return;
+  try {
+    setBobMemoryMerging(true);
+    await fetch('/api/memory/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelSelect?.value || undefined, reason: 'clear-chat' })
+    });
+  } catch (err) {
+    console.warn('Memory merge before clear failed', err);
+  } finally {
+    setBobMemoryMerging(false);
+  }
   localStorage.setItem(visibleChatClearedAtKey, new Date().toISOString());
   messagesEl.innerHTML = '';
 }
@@ -695,6 +759,33 @@ function getSelectedModel() {
   return modelSelect?.value || '';
 }
 
+function sendMemoryInteraction(reason = 'interaction', immediate = false) {
+  const now = Date.now();
+  if (!immediate && now - memoryInteractionLastSent < 10000) return;
+  memoryInteractionLastSent = now;
+  const payload = JSON.stringify({
+    reason,
+    model: getSelectedModel() || undefined
+  });
+
+  if (immediate && navigator.sendBeacon) {
+    navigator.sendBeacon('/api/memory/interaction', new Blob([payload], { type: 'application/json' }));
+    return;
+  }
+
+  fetch('/api/memory/interaction', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+    keepalive: true
+  }).catch(() => {});
+}
+
+function scheduleMemoryInteraction(reason = 'interaction') {
+  clearTimeout(memoryInteractionTimer);
+  memoryInteractionTimer = setTimeout(() => sendMemoryInteraction(reason), 300);
+}
+
 function normalizeModelName(item) {
   if (typeof item === 'string') return item;
   return item?.name || item?.model || '';
@@ -703,7 +794,10 @@ function normalizeModelName(item) {
 async function loadChatModels() {
   if (!modelSelect) return;
 
-  const previousValue = localStorage.getItem(selectedModelKey) || modelSelect.value || defaultModel;
+  const hasCurrentModelSelection = localStorage.getItem(selectedModelVersionKey) === selectedModelVersion;
+  const previousValue = hasCurrentModelSelection
+    ? localStorage.getItem(selectedModelKey) || modelSelect.value || defaultModel
+    : defaultModel;
   modelSelect.disabled = true;
 
   try {
@@ -727,6 +821,11 @@ async function loadChatModels() {
       return;
     }
 
+    const autoOption = document.createElement('option');
+    autoOption.value = 'AUTO';
+    autoOption.textContent = 'AUTO (router chooses)';
+    modelSelect.appendChild(autoOption);
+
     models.forEach(name => {
       const option = document.createElement('option');
       option.value = name;
@@ -734,8 +833,9 @@ async function loadChatModels() {
       modelSelect.appendChild(option);
     });
 
-    modelSelect.value = models.includes(previousValue) ? previousValue : models[0];
+    modelSelect.value = previousValue === 'AUTO' || models.includes(previousValue) ? previousValue : 'AUTO';
     localStorage.setItem(selectedModelKey, modelSelect.value);
+    localStorage.setItem(selectedModelVersionKey, selectedModelVersion);
     send.disabled = false;
   } catch (err) {
     console.warn('Failed to load chat models', err);
@@ -905,6 +1005,43 @@ function updateBobContextStatus({ message, state }) {
   bobContextStatus.textContent = message || 'CTX';
   meta?.classList.toggle('memory-due', state === 'due');
   meta?.classList.toggle('memory-updating', state === 'updating');
+  if (state === 'updating') setBobMemoryMerging(true);
+}
+
+function setBobMemoryMerging(active) {
+  document.body.classList.toggle('bob-memory-merging', Boolean(active));
+}
+
+function handleBobMemoryEvent(event = {}) {
+  const type = String(event.type || '');
+  if (type === 'memory-merge-started') {
+    setBobMemoryMerging(true);
+    return;
+  }
+  if (type === 'memory-merge-complete' || type === 'memory-merge-error' || type === 'wiped') {
+    setBobMemoryMerging(false);
+  }
+}
+
+function startBobMemoryEventStream() {
+  if (bobMemoryEventSource || !window.EventSource) return;
+  try {
+    bobMemoryEventSource = new EventSource('/api/memory/events');
+    bobMemoryEventSource.addEventListener('memory-changed', event => {
+      try {
+        const detail = JSON.parse(event.data || '{}');
+        handleBobMemoryEvent(detail);
+        window.dispatchEvent(new CustomEvent('hal:memory-changed', { detail }));
+      } catch (err) {
+        console.warn('Memory event parse failed', err);
+      }
+    });
+    bobMemoryEventSource.onerror = () => {
+      setBobMemoryMerging(false);
+    };
+  } catch (err) {
+    console.warn('Memory event stream unavailable', err);
+  }
 }
 
 function renderBobContextFromMetadata(metadata = {}) {
@@ -938,7 +1075,8 @@ function unlockAudio() {
 
 function unlockMediaPlayback() {
   unlockedSpeechAudio = unlockedSpeechAudio || new Audio();
-  unlockedSpeechAudio.muted = true;
+  unlockedSpeechAudio.muted = false;
+  unlockedSpeechAudio.volume = 0;
   unlockedSpeechAudio.playsInline = true;
   if (!unlockedSpeechAudio.src) {
     unlockedSpeechAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=';
@@ -950,12 +1088,19 @@ function unlockMediaPlayback() {
     .then(() => {
       unlockedSpeechAudio.pause();
       unlockedSpeechAudio.currentTime = 0;
+      unlockedSpeechAudio.volume = 1;
       unlockedSpeechAudio.muted = bobVoiceMuted;
       audioUnlocked = true;
     })
     .catch(err => {
       if (err?.name !== 'AbortError') console.warn('Media playback unlock failed', err);
     });
+}
+
+function primeAudioFromUserGesture() {
+  unlockAudio();
+  document.removeEventListener('pointerdown', primeAudioFromUserGesture, true);
+  document.removeEventListener('touchend', primeAudioFromUserGesture, true);
 }
 
 function setPlaybackRate(rate) {
@@ -1419,16 +1564,29 @@ function sendPrompt(prompt) {
 
 send.addEventListener('click', () => {
   unlockAudio();
+  sendMemoryInteraction('send-click', true);
   sendMessage();
 });
+document.addEventListener('pointerdown', primeAudioFromUserGesture, true);
+document.addEventListener('touchend', primeAudioFromUserGesture, true);
+document.addEventListener('pointerdown', () => scheduleMemoryInteraction('pointer'), true);
+document.addEventListener('keydown', () => scheduleMemoryInteraction('keyboard'), true);
 clearChat?.addEventListener('click', clearVisibleChat);
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     unlockAudio();
+    sendMemoryInteraction('send-enter', true);
     sendMessage();
   }
 });
-input.addEventListener('input', () => scheduleBobContextRefresh(350));
+input.addEventListener('input', () => {
+  scheduleBobContextRefresh(350);
+  scheduleMemoryInteraction('typing');
+});
+window.addEventListener('pagehide', () => sendMemoryInteraction('disconnect', true));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') sendMemoryInteraction('hidden', true);
+});
 
 playbackSpeed?.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-speed-step]');
@@ -1446,6 +1604,7 @@ bobMemoryBrain?.addEventListener('click', () => openBobMemoryDialog());
 
 modelSelect?.addEventListener('change', () => {
   localStorage.setItem(selectedModelKey, modelSelect.value);
+  localStorage.setItem(selectedModelVersionKey, selectedModelVersion);
   scheduleBobContextRefresh(50);
 });
 
@@ -1494,6 +1653,7 @@ applyBobMuteState();
 loadChatModels();
 loadChatAdminState().finally(loadMemoryHistory);
 startBobContextMonitor();
+startBobMemoryEventStream();
 renderIcons();
 
 window.__icons = { render: renderIcons };

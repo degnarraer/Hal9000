@@ -146,7 +146,14 @@ test('hydrateMessageEmotion mirrors database emotion into metadata', () => {
       role: 'assistant',
       content: 'Done.',
       emotion: 'confident',
-      metadata: { skill: 'bob-chat', emotion: 'confident' }
+      metadata: {
+        skill: 'bob-chat',
+        emotion: 'confident',
+        memoryMerged: false,
+        memoryProcessed: false
+      },
+      memoryMerged: false,
+      memoryProcessed: false
     }
   );
 });
@@ -197,9 +204,27 @@ test('annotateMemoryProcessed marks rows compacted into short-term memory', () =
   });
 
   assert.equal(rows[0].memoryProcessed, true);
+  assert.equal(rows[0].memoryMerged, true);
   assert.equal(rows[0].metadata.memoryProcessed, true);
+  assert.equal(rows[0].metadata.memoryMerged, true);
   assert.equal(rows[1].memoryProcessed, false);
+  assert.equal(rows[1].memoryMerged, false);
   assert.equal(rows[1].metadata.memoryProcessed, false);
+  assert.equal(rows[1].metadata.memoryMerged, false);
+});
+
+test('annotateMemoryProcessed preserves persisted merged chat flags', () => {
+  const rows = annotateMemoryProcessed([
+    { id: 1, role: 'user', content: 'Already merged', memoryMerged: true, metadata: {} },
+    { id: 2, role: 'user', content: 'Still raw', memoryMerged: false, metadata: {} }
+  ], {
+    short: { sourceMessageCount: 0 }
+  });
+
+  assert.equal(rows[0].memoryProcessed, true);
+  assert.equal(rows[0].metadata.memoryMerged, true);
+  assert.equal(rows[1].memoryProcessed, false);
+  assert.equal(rows[1].metadata.memoryMerged, false);
 });
 
 test('transcriptRoleLabel falls back to metadata emotion', () => {

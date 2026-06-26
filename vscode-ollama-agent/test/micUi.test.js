@@ -9,13 +9,39 @@ function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
-test('mic button starts microphone without unlocking TTS playback first', () => {
+test('mic button primes audio playback before starting microphone', () => {
   const micJs = read('public/mic.js');
   const clickHandler = micJs.match(/micToggle\.addEventListener\('click', async \(\) => \{([\s\S]*?)\n  \}\);/);
 
   assert.ok(clickHandler, 'mic click handler should be present');
-  assert.doesNotMatch(clickHandler[1], /unlockAudio/);
+  assert.match(clickHandler[1], /window\.__chat\?\.unlockAudio\?\.\(\)/);
   assert.match(clickHandler[1], /await startMic\(\)/);
+  assert.ok(
+    clickHandler[1].indexOf('window.__chat?.unlockAudio?.()') < clickHandler[1].indexOf('await startMic()'),
+    'audio unlock should happen before the async microphone start'
+  );
+});
+
+test('main chat primes mobile audio from the first user gesture', () => {
+  const appJs = read('public/app.js');
+
+  assert.match(appJs, /function primeAudioFromUserGesture\(\)/);
+  assert.match(appJs, /document\.addEventListener\('pointerdown', primeAudioFromUserGesture, true\)/);
+  assert.match(appJs, /document\.addEventListener\('touchend', primeAudioFromUserGesture, true\)/);
+  assert.match(appJs, /unlockedSpeechAudio\.volume = 0/);
+  assert.match(appJs, /unlockedSpeechAudio\.volume = 1/);
+});
+
+test('main chat defaults to AUTO model selection across devices', () => {
+  const appJs = read('public/app.js');
+
+  assert.match(appJs, /const defaultModel = 'AUTO'/);
+  assert.match(appJs, /const selectedModelVersion = '2'/);
+  assert.match(appJs, /localStorage\.getItem\(selectedModelVersionKey\) === selectedModelVersion/);
+  assert.match(appJs, /autoOption\.value = 'AUTO'/);
+  assert.match(appJs, /autoOption\.textContent = 'AUTO \(router chooses\)'/);
+  assert.match(appJs, /previousValue === 'AUTO' \|\| models\.includes\(previousValue\) \? previousValue : 'AUTO'/);
+  assert.match(appJs, /localStorage\.setItem\(selectedModelVersionKey, selectedModelVersion\)/);
 });
 
 test('mic active state reveals the voice card', () => {
@@ -26,6 +52,17 @@ test('mic active state reveals the voice card', () => {
   assert.match(css, /\.input-section\.mic-active \.composer-voice\{[^}]*opacity:1/);
 });
 
+test('mic panel opens before mobile permission promise resolves', () => {
+  const micJs = read('public/mic.js');
+  const startMicBody = micJs.match(/async function startMic\(\) \{([\s\S]*?)\nfunction stopMic\(\)/);
+
+  assert.ok(startMicBody, 'startMic body should be present');
+  assert.ok(
+    startMicBody[1].indexOf('setMicButtonState(true)') < startMicBody[1].indexOf('await navigator.mediaDevices.getUserMedia'),
+    'mic UI should become active before awaiting mobile microphone permission'
+  );
+});
+
 test('mobile mic card is viewport anchored above the input bar', () => {
   const css = read('public/style.css');
   const mobileRule = css.match(/@media \(max-width: 768px\) \{[\s\S]*?\.composer-voice\{([^}]*)\}/);
@@ -34,6 +71,19 @@ test('mobile mic card is viewport anchored above the input bar', () => {
   assert.match(mobileRule[1], /position:fixed/);
   assert.match(mobileRule[1], /bottom:calc\(84px \+ env\(safe-area-inset-bottom\)\)/);
   assert.match(mobileRule[1], /z-index:30005/);
+});
+
+test('mobile layout avoids fixed card and content limits', () => {
+  const css = read('public/style.css');
+  const mobileBlock = css.match(/@media \(max-width: 768px\) \{([\s\S]*)\n\}/);
+
+  assert.ok(mobileBlock, 'mobile responsive block should be present');
+  assert.doesNotMatch(mobileBlock[1], /\.voice-panel\{[^}]*height:150px/);
+  assert.doesNotMatch(mobileBlock[1], /\.bob-chat-tester-grid\{[^}]*minmax\(320px/);
+  assert.doesNotMatch(mobileBlock[1], /\.bob-chat-test-conversation\{[^}]*min-height:320px/);
+  assert.doesNotMatch(mobileBlock[1], /\.bob-chat-trace-table\{[^}]*min-width:1040px/);
+  assert.doesNotMatch(mobileBlock[1], /\.bob-chat-test-messages\{[^}]*min-height:220px/);
+  assert.doesNotMatch(mobileBlock[1], /\.user-chat-people\{[^}]*max-height:220px/);
 });
 
 test('context usage chart fills the voice waveform column', () => {

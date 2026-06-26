@@ -20,9 +20,8 @@ const { createOllamaConfigStore } = require('./ollamaConfig');
 const { buildBobChatFallbackResponse, buildBobChatSkillInstructions } = require('./bobChatSkill');
 const { buildBobEmotionPrompt, heuristicBobEmotion, parseBobEmotionContract } = require('./bobEmotionSkill');
 const { BOB_ROUTER_SKILLS, buildBobRouterPrompt, heuristicBobRoute, isAutoModel, parseBobRouterContract, parseModelSizeB, sanitizeModelRules, selectBobModel, selectRouterModel } = require('./bobRouterSkill');
-const { shouldSearchWeb, extractSearchQuery, searchWeb, buildWebFallbackResponse, buildWebSummaryPrompt, hasUnsupportedWebClaims, isSearchDumpResponse } = require('./webSearch');
+const { shouldSearchWeb, extractSearchQuery, extractUserPromptFactoids, searchWeb, buildWebFallbackResponse, buildWebSummaryPrompt, hasUnsupportedWebClaims, isSearchDumpResponse } = require('./webSearch');
 const { BOB_CHAT_RESPONSE_CONTRACT, BOB_EMOTIONS, buildSkillInputContract, parseBobChatContract, parseJsonObject, parseSkillOutputContract } = require('./bobSkillContracts');
-const { filterSupportedFactoids } = require('./memoryFactoids');
 const { createStreamingResponseSentenceEmitter, extractStreamingResponseText } = require('./bobStreamingText');
 const { getTtsProvider, getSupportedTtsProviders, getPiperConfigDetails, getPiperRuntimeStatus, getRhubarbRuntimeStatus, resolveTtsProvider, buildPiperEnv, splitTextForTts, synthesizePiperSpeech, synthesizePiperSpeechFile, generateRhubarbVisemes } = require('./tts');
 const { createTtsSettingsStore } = require('./ttsSettings');
@@ -40,7 +39,7 @@ const MEMORY_SUMMARY_INTERVALS = {
 };
 const MEMORY_BUDGET = {
   modelContextTokens: Number(process.env.MEMORY_MODEL_CONTEXT_TOKENS || process.env.OLLAMA_MODEL_CONTEXT_TOKENS || 4096),
-  triggerRatio: Number(process.env.MEMORY_CONTEXT_TRIGGER_RATIO || 0.72),
+  triggerRatio: Number(process.env.MEMORY_CONTEXT_TRIGGER_RATIO || 0.5),
   promptReserveTokens: Number(process.env.MEMORY_PROMPT_RESERVE_TOKENS || 1200),
   maxWords: {
     short: Number(process.env.MEMORY_SHORT_MAX_WORDS || 120),
@@ -56,7 +55,7 @@ const ROUTER_MODEL_MIN_SIZE_B = Number(process.env.OLLAMA_ROUTER_MODEL_MIN_B || 
 const AUTO_MODEL_FALLBACK_MIN_SIZE_B = Number(process.env.OLLAMA_AUTO_MODEL_FALLBACK_MIN_B || 2);
 const BOB_STAGE_DEFINITIONS_PATH = process.env.BOB_STAGE_DEFINITIONS_PATH || path.join(__dirname, '..', '.bob-stage-definitions.json');
 const BOB_SKILL_DEFINITIONS_PATH = process.env.BOB_SKILL_DEFINITIONS_PATH || path.join(__dirname, '..', '.bob-skill-definitions.json');
-const MEMORY_BACKGROUND_FACTOIDS = String(process.env.MEMORY_BACKGROUND_FACTOIDS || '').toLowerCase() === 'true';
+const MEMORY_IDLE_MERGE_MS = Math.max(1000, Number(process.env.MEMORY_IDLE_MERGE_MS || 60 * 1000));
 
 // instantiate logger early so top-level functions (loadRules, routes) can use it without causing a TDZ
 const logger = new Logger({ bufferSize: 2000 });
@@ -71,6 +70,8 @@ const userChat = createUserChatStore(logger);
 const ollamaConfig = createOllamaConfigStore(logger);
 const bobContextUsage = new Map();
 const memoryEventClients = new Map();
+const memoryIdleTimers = new Map();
+const memoryLastModels = new Map();
 const ttsGeneratedAudio = new Map();
 const TTS_GENERATED_AUDIO_TTL_MS = Number(process.env.TTS_GENERATED_AUDIO_TTL_MS || 5 * 60 * 1000);
 
@@ -537,6 +538,59 @@ function publishMemoryChanged({ req, type = 'memory', count = 0 } = {}) {
     }
   }
   if (!clients.size) memoryEventClients.delete(userKey);
+}
+
+function memoryIdleMergeKey(req, conversationId = 'default') {
+  return `${requestDatabaseUserKey(req)}:${conversationId}`;
+}
+
+function memoryReqSnapshot(req) {
+  return {
+    user: { ...(req?.user || {}) },
+    ai: req?.ai ? { ...req.ai } : undefined
+  };
+}
+
+function scheduleMemoryIdleMerge({ req, model, conversationId = 'default', reason = 'idle' } = {}) {
+  let key;
+  try {
+    key = memoryIdleMergeKey(req, conversationId);
+  } catch (err) {
+    return;
+  }
+
+  if (memoryIdleTimers.has(key)) {
+    clearTimeout(memoryIdleTimers.get(key));
+  }
+  if (model) memoryLastModels.set(key, model);
+
+  const snapshot = memoryReqSnapshot(req);
+  const mergeModel = model || memoryLastModels.get(key) || DEFAULT_MODEL;
+  const timer = setTimeout(() => {
+    memoryIdleTimers.delete(key);
+    memorySkill.requestCascadeUpdate({
+      req: snapshot,
+      model: mergeModel,
+      conversationId,
+      scopes: ['long', 'medium', 'short'],
+      reason: `idle-${reason}`
+    }).catch(err => logger.warn('Idle memory merge failed', getErrorText(err)));
+  }, MEMORY_IDLE_MERGE_MS);
+
+  if (typeof timer.unref === 'function') timer.unref();
+  memoryIdleTimers.set(key, timer);
+}
+
+function clearMemoryIdleMerge(req, conversationId = 'default') {
+  let key;
+  try {
+    key = memoryIdleMergeKey(req, conversationId);
+  } catch (err) {
+    return;
+  }
+  if (!memoryIdleTimers.has(key)) return;
+  clearTimeout(memoryIdleTimers.get(key));
+  memoryIdleTimers.delete(key);
 }
 
 const ollamaModelStatusClients = new Set();
@@ -1559,7 +1613,6 @@ const memorySkill = createMemorySkillService({
   generateText: generateOllamaText,
   intervals: MEMORY_SUMMARY_INTERVALS,
   budget: MEMORY_BUDGET,
-  backgroundFactoids: MEMORY_BACKGROUND_FACTOIDS,
   getErrorText,
   onMemoryChanged: publishMemoryChanged
 });
@@ -1589,7 +1642,10 @@ async function runWebSearchSkill({ req, model, prompt, query: routedQuery = '', 
     data: { query },
     sources: results
   });
-  contract.output.factoids = extractResponseFactoids(rawSummary);
+  contract.output.factoids = mergeFactoidCandidates(
+    extractResponseFactoids(rawSummary),
+    extractUserPromptFactoids(prompt)
+  );
   contract.output.data = { query, ...(contract.output.data || {}) };
   contract.output.data.query = query;
   const hasPlaceholderSources = contract.output.sources.some(source =>
@@ -2157,21 +2213,34 @@ async function persistBobUserMessage({ req, model, prompt }) {
   return userMessage;
 }
 
-async function persistResponseFactoids({ req, model, factoids, evidenceMessages, sourceMessageId }) {
-  if (!Array.isArray(factoids) || factoids.length === 0) return [];
-  const supported = filterSupportedFactoids(factoids, evidenceMessages || []);
-  if (supported.length === 0) return [];
-  const saved = await memory.saveFactoids({
-    req,
-    model,
-    sourceMessageId,
-    factoids: supported
-  });
-  if (saved.length > 0) publishMemoryChanged({ req, type: 'factoids', count: saved.length });
-  return saved;
+function normalizeChatFactoids(factoids = []) {
+  if (!Array.isArray(factoids)) return [];
+  return factoids
+    .map(item => ({
+      factKey: String(item?.factKey || item?.key || '').trim().slice(0, 120),
+      category: String(item?.category || 'general').trim().slice(0, 80) || 'general',
+      fact: String(item?.fact || item?.value || '').trim().slice(0, 1000),
+      confidence: Math.max(0, Math.min(1, Number(item?.confidence) || 0))
+    }))
+    .filter(item => item.fact);
 }
 
-async function persistBobAssistantMessage({ req, model, response, metadata, route, trace, sourceMessageId, factoids = [], evidenceMessages = [] }) {
+function mergeFactoidCandidates(...groups) {
+  const merged = [];
+  const seen = new Set();
+  for (const group of groups) {
+    for (const item of normalizeChatFactoids(group)) {
+      const key = item.factKey || item.fact.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+  }
+  return merged;
+}
+
+async function persistBobAssistantMessage({ req, model, response, metadata, route, trace, sourceMessageId, factoids = [] }) {
+  const responseFactoids = normalizeChatFactoids(factoids);
   const assistantMessage = await memory.addMessage({
     req,
     role: 'assistant',
@@ -2181,23 +2250,14 @@ async function persistBobAssistantMessage({ req, model, response, metadata, rout
       skill: metadata.skill,
       skills: metadata.skills,
       ...metadata,
+      responseFactoids,
       router: route,
       ...skillDebugMetadata(req, traceToSkillDebug(trace))
     }
   });
   if (assistantMessage) publishMemoryChanged({ req, type: 'assistant-message', count: 1 });
-  try {
-    await persistResponseFactoids({
-      req,
-      model,
-      factoids,
-      evidenceMessages,
-      sourceMessageId: sourceMessageId || assistantMessage?.id
-    });
-  } catch (err) {
-    logger.warn('Response factoid persistence failed', getErrorText(err));
-  }
   memorySkill.updateAfterTurn({ req, model, sourceMessageId: sourceMessageId || assistantMessage?.id });
+  scheduleMemoryIdleMerge({ req, model, reason: 'after-turn' });
   return assistantMessage;
 }
 
@@ -2234,6 +2294,7 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
     })
   ];
   let modelDiagnostics = [];
+  if (persist) clearMemoryIdleMerge(req);
   const persistedUserMessage = persist
     ? await persistBobUserMessage({ req, model, prompt: originalPrompt })
     : null;
@@ -2316,8 +2377,7 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
         route,
         trace,
         sourceMessageId: persistedUserMessage?.id,
-        factoids: search.factoids || [],
-        evidenceMessages: [{ role: 'user', content: originalPrompt }]
+        factoids: search.factoids || []
       });
     }
     return result;
@@ -2372,10 +2432,6 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
     contract: parseBobChatContract(rawBobOutput),
     rawOutput: rawBobOutput
   });
-  const responseFactoidEvidence = [
-    ...history,
-    { role: 'user', content: originalPrompt }
-  ];
   const validation = validateBobChatRawContract(rawBobOutput);
   const emotionContract = deferEmotion
     ? {
@@ -2472,8 +2528,7 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
       route,
       trace,
       sourceMessageId: persistedUserMessage?.id,
-      factoids: bobContract.factoids || [],
-      evidenceMessages: responseFactoidEvidence
+      factoids: bobContract.factoids || []
     });
   }
 
@@ -2509,6 +2564,7 @@ app.get('/api/memory/context', applyAiRules, async (req, res) => {
     const memoryPressureTokens = Object.values(summaries || {}).reduce((total, summary) => total + estimateTokens(summary?.summary), 0) +
       (history || []).reduce((total, message) => total + estimateTokens(message?.content), 0);
     const messageDue = Object.keys(memory.summaryScopes).some(scope => {
+      if (scope === 'long') return false;
       const interval = Math.max(1, Number(MEMORY_SUMMARY_INTERVALS[scope]) || 1);
       const sourceCount = Number(summaries[scope]?.sourceMessageCount || 0);
       return messageCount > 0 && messageCount - sourceCount >= interval;
@@ -2573,6 +2629,13 @@ app.get('/api/memory/events', admin.requireAdmin, (req, res) => {
 
 app.delete('/api/memory/messages/:id', async (req, res) => {
   try {
+    await memorySkill.requestCascadeUpdate({
+      req,
+      model: req.body?.model || req.query.model || DEFAULT_MODEL,
+      conversationId: req.body?.conversationId || req.query.conversationId || 'default',
+      scopes: ['long', 'medium', 'short'],
+      reason: 'message-delete'
+    });
     const deleted = await memory.deleteMessage({ req, id: req.params.id });
     if (!deleted) return res.status(404).json({ ok: false, error: 'Chat memory item not found' });
     publishMemoryChanged({ req, type: 'messages-deleted', count: 1 });
@@ -2607,6 +2670,37 @@ app.delete('/api/memory', async (req, res) => {
     res.status(500).json({ ok: false, error: 'Could not wipe memory' });
   }
 });
+app.post('/api/memory/interaction', (req, res) => {
+  try {
+    scheduleMemoryIdleMerge({
+      req,
+      model: req.body?.model || req.query.model || DEFAULT_MODEL,
+      conversationId: req.body?.conversationId || req.query.conversationId || 'default',
+      reason: req.body?.reason || req.query.reason || 'interaction'
+    });
+    res.json({ ok: true, data: { idleMergeMs: MEMORY_IDLE_MERGE_MS } });
+  } catch (err) {
+    logger.warn('memory interaction failed', getErrorText(err));
+    res.status(500).json({ ok: false, error: 'Could not update memory idle timer' });
+  }
+});
+app.post('/api/memory/merge', async (req, res) => {
+  try {
+    clearMemoryIdleMerge(req, req.body?.conversationId || req.query.conversationId || 'default');
+    const summary = await memorySkill.requestCascadeUpdate({
+      req,
+      model: req.body?.model || req.query.model || DEFAULT_MODEL,
+      conversationId: req.body?.conversationId || req.query.conversationId || 'default',
+      scopes: ['long', 'medium', 'short'],
+      reason: req.body?.reason || req.query.reason || 'manual'
+    });
+    res.json({ ok: true, data: summary });
+  } catch (err) {
+    const error = getErrorText(err);
+    logger.error('memory merge failed', error);
+    res.status(err?.response?.status || 500).json({ ok: false, error });
+  }
+});
 app.post('/api/memory/summarize', async (req, res) => {
   const scope = req.body?.scope || 'cascade';
   const scopeConfig = memory.summaryScopes[scope];
@@ -2616,7 +2710,7 @@ app.post('/api/memory/summarize', async (req, res) => {
   try {
     const model = req.body?.model || DEFAULT_MODEL;
     const summary = isCascade
-      ? await memorySkill.runCascadeUpdate({ req, model, conversationId: req.body?.conversationId || 'default' })
+      ? await memorySkill.requestCascadeUpdate({ req, model, conversationId: req.body?.conversationId || 'default', reason: 'manual-summarize' })
       : await memorySkill.refreshSummary({ req, model, scope, conversationId: req.body?.conversationId || 'default' });
     res.json({ ok: true, data: summary });
   } catch (err) {

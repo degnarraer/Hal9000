@@ -41,6 +41,17 @@ async function startMic() {
   }
 
   try {
+    finalTranscriptBuffer = '';
+    speechRecognitionFailed = false;
+    detectedAudioWhileSpeechFailed = false;
+    setMicButtonState(true);
+    setMicTranscript('Starting microphone...');
+
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: micAudioConstraints
     });
@@ -51,13 +62,8 @@ async function startMic() {
     }
 
     logAppliedMicSettings(mediaStream);
-    finalTranscriptBuffer = '';
-    speechRecognitionFailed = false;
-    detectedAudioWhileSpeechFailed = false;
-    setMicButtonState(true);
     setMicTranscript('Listening...');
 
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') {
       await audioCtx.resume();
     }
@@ -84,6 +90,7 @@ function stopMic() {
   console.log('stopMic called');
   micStartToken += 1;
   startingMic = false;
+  setMicButtonState(false);
   mediaStream && mediaStream.getTracks().forEach(t => t.stop());
   animationId && cancelAnimationFrame(animationId);
   animationId = null;
@@ -98,7 +105,6 @@ function stopMic() {
   detectedAudioWhileSpeechFailed = false;
   stopSpeechRecognition();
   setMicTranscript('');
-  setMicButtonState(false);
 }
 
 function renderIcons() {
@@ -325,6 +331,7 @@ if (micToggle) {
       stopMic();
     } else {
       try {
+        window.__chat?.unlockAudio?.();
         await startMic();
       } catch (e) {
         console.error(e);
