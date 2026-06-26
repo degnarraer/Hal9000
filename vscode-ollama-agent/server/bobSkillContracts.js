@@ -48,15 +48,7 @@ function bobEmotionApiDescription() {
 
 const BOB_CHAT_RESPONSE_CONTRACT = {
   response: 'text shown to the user',
-  metadata: { emotion: 'idle' },
-  factoids: [
-    {
-      factKey: 'short-stable-key',
-      category: 'preference|project|identity|environment|workflow|constraint|general',
-      fact: 'The user ...',
-      confidence: 0
-    }
-  ]
+  metadata: { emotion: 'idle' }
 };
 
 function normalizeBobEmotion(value) {
@@ -142,20 +134,14 @@ function parseBobChatContract(rawOutput) {
   const rawMetadata = parsed.metadata || parsed.output?.metadata;
   const metadataIsObject = Boolean(rawMetadata && typeof rawMetadata === 'object' && !Array.isArray(rawMetadata));
   const metadata = metadataIsObject ? rawMetadata : {};
-  const factoids = Array.isArray(parsed.factoids)
-    ? parsed.factoids
-    : Array.isArray(parsed.output?.factoids)
-      ? parsed.output.factoids
-      : [];
-  const factoidsIsArray = Array.isArray(parsed.factoids) || Array.isArray(parsed.output?.factoids);
   return {
     response: response || raw,
     metadata: {
       ...metadata,
       emotion: normalizeBobEmotion(metadata?.emotion),
-      contractValid: Boolean(response) && metadataIsObject && factoidsIsArray && !recoveredMalformed
+      contractValid: Boolean(response) && metadataIsObject && !recoveredMalformed
     },
-    factoids
+    factoids: []
   };
 }
 

@@ -44,6 +44,29 @@ test('transcriptFromMessages includes response factoids captured on chat rows', 
   assert.match(transcript, /"fact": "The user is named Rob\."/);
 });
 
+test('transcriptFromMessages omits web-search prose from memory evidence', () => {
+  const transcript = transcriptFromMessages([
+    { role: 'user', content: 'I want to buy a truck.' },
+    {
+      role: 'assistant',
+      content: '2024 models like the Ford Maverick Lobo and Scout Terra may be worth comparing.',
+      metadata: {
+        skill: 'web-search',
+        emotion: 'focused',
+        responseFactoids: [
+          { factKey: 'preference-wants-to-buy-a-truck', category: 'preference', fact: 'The user wants to buy a truck.', confidence: 0.9 }
+        ]
+      }
+    }
+  ]);
+
+  assert.match(transcript, /I want to buy a truck/);
+  assert.match(transcript, /web-search response omitted/);
+  assert.match(transcript, /The user wants to buy a truck/);
+  assert.doesNotMatch(transcript, /Ford Maverick Lobo/);
+  assert.doesNotMatch(transcript, /Scout Terra/);
+});
+
 test('buildFactoidExtractionPrompt forbids unsupported sensitive inference', () => {
   const prompt = buildFactoidExtractionPrompt('User: My name is Rob.');
 

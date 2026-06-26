@@ -7,7 +7,9 @@ const AUTO_MODEL_VALUE = 'AUTO';
 const ROUTER_CONTRACT = {
   skill: 'bob-chat',
   query: '',
-  reason: ''
+  reason: '',
+  parameters: {},
+  factoids: []
 };
 
 const MODEL_ROUTER_CONTRACT = {
@@ -118,12 +120,38 @@ function parseBobRouterContract(rawOutput, prompt = '') {
   const skill = parsed.skill === 'web-search' ? 'web-search' : 'bob-chat';
   const hasPlaceholderReason = isPlaceholderReason(parsed.reason);
   const reason = cleanReason(parsed.reason) || defaultRouteReason(skill);
+  const factoids = normalizeRouterFactoids(parsed.factoids);
   return {
     skill,
     query: skill === 'web-search' ? String(parsed.query || extractSearchQuery(prompt)).trim() : '',
     reason,
-    contractValid: Boolean(parsed.skill) && !hasPlaceholderReason
+    parameters: parsed.parameters && typeof parsed.parameters === 'object' && !Array.isArray(parsed.parameters)
+      ? parsed.parameters
+      : {},
+    factoids,
+    contractValid: Boolean(parsed.skill) && !hasPlaceholderReason && Array.isArray(parsed.factoids)
   };
+}
+
+function normalizeRouterFactoids(group) {
+  const merged = [];
+  const seen = new Set();
+  if (!Array.isArray(group)) return merged;
+  for (const item of group) {
+    const fact = String(item?.fact || item?.value || '').trim();
+    if (!fact) continue;
+    const factoid = {
+      factKey: String(item?.factKey || item?.key || fact.toLowerCase().replace(/[^a-z0-9]+/g, '-')).trim().slice(0, 120),
+      category: String(item?.category || 'general').trim().slice(0, 80) || 'general',
+      fact: fact.slice(0, 1000),
+      confidence: Math.max(0, Math.min(1, Number(item?.confidence) || 0))
+    };
+    const key = factoid.factKey || factoid.fact.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(factoid);
+  }
+  return merged;
 }
 
 function defaultRouteReason(skill) {
@@ -147,6 +175,8 @@ function heuristicBobRoute(prompt = '', contractValid = true) {
     skill: useSearch ? 'web-search' : 'bob-chat',
     query: useSearch ? extractSearchQuery(prompt) : '',
     reason: useSearch ? 'Keyword heuristic matched web search intent.' : 'No web search intent detected.',
+    parameters: {},
+    factoids: [],
     contractValid
   };
 }

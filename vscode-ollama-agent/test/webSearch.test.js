@@ -3,7 +3,6 @@ const assert = require('node:assert/strict');
 const {
   shouldSearchWeb,
   extractSearchQuery,
-  extractUserPromptFactoids,
   parseDuckDuckGoResults,
   buildWebFallbackResponse,
   hasUnsupportedWebClaims,
@@ -23,18 +22,6 @@ test('extractSearchQuery removes common command phrasing', () => {
     'latest Ollama web search support'
   );
   assert.equal(extractSearchQuery('look up bighal duckdns'), 'bighal duckdns');
-});
-
-test('extractUserPromptFactoids captures user shopping intent from web prompts', () => {
-  assert.deepEqual(
-    extractUserPromptFactoids('I want a truck. Search cool trucks to buy.'),
-    [{
-      factKey: 'preference-wants-a-truck',
-      category: 'preference',
-      fact: 'The user wants a truck.',
-      confidence: 0.9
-    }]
-  );
 });
 
 test('parseDuckDuckGoResults extracts titles urls and snippets', () => {
@@ -65,9 +52,8 @@ test('buildWebSummaryPrompt includes source links for ollama summarization', () 
   assert.match(prompt, /"contractVersion":1/);
   assert.match(prompt, /"skill":"web-search"/);
   assert.match(prompt, /"output":\{"response":"text shown to the user"/);
-  assert.match(prompt, /"factoids":\[/);
-  assert.match(prompt, /durable user facts explicitly supported by the user prompt/);
-  assert.match(prompt, /I want a truck/);
+  assert.doesNotMatch(prompt, /"factoids":\[/);
+  assert.match(prompt, /router stage already captured user facts/);
   assert.match(prompt, /not a numbered search-results dump/);
   assert.match(prompt, /ONLY use facts literally present/);
   assert.match(prompt, /data\.query must be exactly "Bob"/);

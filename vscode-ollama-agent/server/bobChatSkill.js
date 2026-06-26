@@ -24,8 +24,6 @@ function buildBobChatSkillInstructions(req, prompt = '') {
     `Output only minified JSON: ${contractJson}.`,
     'response: plain-language answer to the current user message only.',
     'metadata.emotion: one word state for this answer; use idle unless a stronger state is obvious.',
-    'factoids: durable user facts explicitly supported by the current user message; use [] when no new durable fact appears.',
-    'Each factoid must use factKey, category, fact, and confidence. Do not infer sensitive facts or facts not stated by the user.',
     'No markdown fences. No text outside JSON. Do not explain the contract.'
   ];
   if (!displayName || !isBareGreeting(prompt)) return instructions;

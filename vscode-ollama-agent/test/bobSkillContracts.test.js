@@ -54,11 +54,11 @@ test('buildSkillOutputContract normalizes response metadata and sources', () => 
 
 test('parseBobChatContract extracts response and emotion from valid Bob JSON', () => {
   assert.deepEqual(
-    parseBobChatContract('{"response":"I can help with that.","metadata":{"emotion":"focused","topic":"work"},"factoids":[{"factKey":"likes-short-answers","category":"preference","fact":"The user likes short answers.","confidence":0.8}]}'),
+    parseBobChatContract('{"response":"I can help with that.","metadata":{"emotion":"focused","topic":"work"}}'),
     {
       response: 'I can help with that.',
       metadata: { emotion: 'focused', topic: 'work', contractValid: true },
-      factoids: [{ factKey: 'likes-short-answers', category: 'preference', fact: 'The user likes short answers.', confidence: 0.8 }]
+      factoids: []
     }
   );
 });
@@ -76,7 +76,7 @@ test('parseBobChatContract marks missing metadata as invalid contract', () => {
 
 test('parseBobChatContract tolerates fenced JSON and invalid emotions', () => {
   assert.deepEqual(
-    parseBobChatContract('```json\n{"response":"Whoa.","metadata":{"emotion":"loud"},"factoids":[]}\n```'),
+    parseBobChatContract('```json\n{"response":"Whoa.","metadata":{"emotion":"loud"}}\n```'),
     {
       response: 'Whoa.',
       metadata: { emotion: 'idle', contractValid: true },

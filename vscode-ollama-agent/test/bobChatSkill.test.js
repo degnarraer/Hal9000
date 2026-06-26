@@ -21,12 +21,11 @@ test('buildBobChatSkillInstructions limits authenticated name to bare greetings'
   assert.match(instructions.join('\n'), /Output only minified JSON/);
   assert.match(instructions.join('\n'), /response: plain-language answer/);
   assert.match(instructions.join('\n'), /metadata\.emotion: one word state/);
-  assert.match(instructions.join('\n'), /factoids: durable user facts/);
   assert.match(instructions.join('\n'), /Do not explain the contract/);
   assert.match(instructions.join('\n'), /"response":"text shown to the user"/);
   assert.match(instructions.join('\n'), /No text outside JSON/);
   assert.match(instructions.join('\n'), /"metadata":\{"emotion":"idle"\}/);
-  assert.match(instructions.join('\n'), /"factoids":\[/);
+  assert.doesNotMatch(instructions.join('\n'), /factoids/);
   assert.doesNotMatch(instructions.join('\n'), /Emotion API descriptions/);
   assert.doesNotMatch(instructions.join('\n'), /focused: Task-oriented concentration/);
   assert.doesNotMatch(instructions.join('\n'), /concerned: Careful worry or caution/);

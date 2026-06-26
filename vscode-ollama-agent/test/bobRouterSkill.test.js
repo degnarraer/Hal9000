@@ -44,7 +44,7 @@ test('buildBobRouterPrompt is a direct routing contract', () => {
   });
 
   assert.match(prompt, /You are Bob Router/);
-  assert.match(prompt, /"skill":"bob-chat","query":"","reason":""/);
+  assert.match(prompt, /"skill":"bob-chat","query":"","reason":"","parameters":\{\},"factoids":\[\]/);
   assert.doesNotMatch(prompt, /short reason/);
   assert.match(prompt, /<router_request>/);
   assert.match(prompt, /"skills": \{/);
@@ -61,23 +61,32 @@ test('buildBobRouterPrompt is a direct routing contract', () => {
 
 test('parseBobRouterContract accepts web-search and bob-chat routes', () => {
   assert.deepEqual(
-    parseBobRouterContract('{"skill":"web-search","query":"latest ollama release","reason":"current fact"}', 'ignored'),
-    { skill: 'web-search', query: 'latest ollama release', reason: 'current fact', contractValid: true }
+    parseBobRouterContract('{"skill":"web-search","query":"latest ollama release","reason":"current fact","parameters":{},"factoids":[{"factKey":"preference-wants-to-buy-a-truck","category":"preference","fact":"The user wants to buy a truck.","confidence":0.9}]}', 'ignored'),
+    {
+      skill: 'web-search',
+      query: 'latest ollama release',
+      reason: 'current fact',
+      parameters: {},
+      factoids: [{ factKey: 'preference-wants-to-buy-a-truck', category: 'preference', fact: 'The user wants to buy a truck.', confidence: 0.9 }],
+      contractValid: true
+    }
   );
   assert.deepEqual(
-    parseBobRouterContract('{"skill":"bob-chat","query":"bad","reason":"stable"}', 'Hello'),
-    { skill: 'bob-chat', query: '', reason: 'stable', contractValid: true }
+    parseBobRouterContract('{"skill":"bob-chat","query":"bad","reason":"stable","parameters":{},"factoids":[]}', 'Hello'),
+    { skill: 'bob-chat', query: '', reason: 'stable', parameters: {}, factoids: [], contractValid: true }
   );
   assert.deepEqual(
-    parseBobRouterContract('{"skill":"bob-chat","query":"","reason":"short reason"}', 'Hello'),
-    { skill: 'bob-chat', query: '', reason: 'The question can be answered without external research.', contractValid: false }
+    parseBobRouterContract('{"skill":"bob-chat","query":"","reason":"short reason","parameters":{},"factoids":[]}', 'Hello'),
+    { skill: 'bob-chat', query: '', reason: 'The question can be answered without external research.', parameters: {}, factoids: [], contractValid: false }
   );
   assert.deepEqual(
-    parseBobRouterContract('{"skill":"web-search","query":"Springfield Illinois","reason":""}', 'tell me about Springfield Illinois'),
+    parseBobRouterContract('{"skill":"web-search","query":"Springfield Illinois","reason":"","parameters":{},"factoids":[]}', 'tell me about Springfield Illinois'),
     {
       skill: 'web-search',
       query: 'Springfield Illinois',
       reason: 'The question needs source-backed or current factual information.',
+      parameters: {},
+      factoids: [],
       contractValid: true
     }
   );
@@ -88,6 +97,8 @@ test('parseBobRouterContract falls back to heuristic route on invalid JSON', () 
     skill: 'web-search',
     query: 'what is the latest keycloak release?',
     reason: 'Keyword heuristic matched web search intent.',
+    parameters: {},
+    factoids: [],
     contractValid: false
   });
   assert.equal(heuristicBobRoute('write a haiku').skill, 'bob-chat');
@@ -100,6 +111,8 @@ test('parseBobRouterContract treats prose answers as invalid route output', () =
       skill: 'bob-chat',
       query: '',
       reason: 'No web search intent detected.',
+      parameters: {},
+      factoids: [],
       contractValid: false
     }
   );

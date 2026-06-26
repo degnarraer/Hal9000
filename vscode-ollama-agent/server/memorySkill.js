@@ -58,21 +58,25 @@ function transcriptFromMessages(messages = []) {
   return JSON.stringify({
     chatHistory: (messages || []).map(row => {
       const role = row?.role === 'assistant' ? 'assistant' : row?.role === 'system' ? 'system' : 'user';
+      const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+      const skill = String(metadata.skill || row?.skill || '').trim();
       const base = {
         role,
         dateTime: normalizeMessageDateTime(row),
-        content: String(row?.content || '')
+        content: role === 'assistant' && skill === 'web-search'
+          ? '[web-search response omitted from memory evidence; use responseFactoids only]'
+          : String(row?.content || '')
       };
       if (role === 'assistant') {
-        const responseFactoids = Array.isArray(row?.metadata?.responseFactoids)
-          ? row.metadata.responseFactoids
+        const responseFactoids = Array.isArray(metadata.responseFactoids)
+          ? metadata.responseFactoids
           : Array.isArray(row?.responseFactoids)
             ? row.responseFactoids
             : [];
         const output = {
           ...base,
-          assistantEmotion: String(row?.assistantEmotion || row?.emotion || row?.metadata?.emotion || 'neutral'),
-          assistantEmotionIntensity: normalizeEmotionIntensity(row?.assistantEmotionIntensity ?? row?.metadata?.assistantEmotionIntensity ?? row?.metadata?.emotionIntensity)
+          assistantEmotion: String(row?.assistantEmotion || row?.emotion || metadata.emotion || 'neutral'),
+          assistantEmotionIntensity: normalizeEmotionIntensity(row?.assistantEmotionIntensity ?? metadata.assistantEmotionIntensity ?? metadata.emotionIntensity)
         };
         const normalizedFactoids = responseFactoids.map(item => ({
             factKey: String(item?.factKey || item?.key || '').trim(),
@@ -86,8 +90,8 @@ function transcriptFromMessages(messages = []) {
       if (role === 'user') {
         return {
           ...base,
-          detectedUserEmotion: String(row?.detectedUserEmotion || row?.metadata?.detectedUserEmotion || row?.metadata?.emotion || 'neutral'),
-          detectedUserEmotionIntensity: normalizeEmotionIntensity(row?.detectedUserEmotionIntensity ?? row?.metadata?.detectedUserEmotionIntensity ?? row?.metadata?.emotionIntensity)
+          detectedUserEmotion: String(row?.detectedUserEmotion || metadata.detectedUserEmotion || metadata.emotion || 'neutral'),
+          detectedUserEmotionIntensity: normalizeEmotionIntensity(row?.detectedUserEmotionIntensity ?? metadata.detectedUserEmotionIntensity ?? metadata.emotionIntensity)
         };
       }
       return base;

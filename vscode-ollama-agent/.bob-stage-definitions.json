@@ -21,10 +21,20 @@
         "skill": null,
         "query": null,
         "reason": null,
-        "parameters": {}
+        "parameters": {},
+        "factoids": [
+          {
+            "factKey": "short-stable-key",
+            "category": "preference|project|identity|environment|workflow|constraint|general",
+            "fact": "The user ...",
+            "confidence": 0
+          }
+        ]
       },
       "instructions": [
         "Read the inputTemplate.",
+        "Extract durable user factoids from input.text only, before any selected skill runs.",
+        "Do not use web results, assistant responses, or tool output as factoid evidence.",
         "Select exactly one skill from skills.available.",
         "Populate the outputTemplate.",
         "Return only the outputTemplate as valid JSON.",

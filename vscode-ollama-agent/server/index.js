@@ -20,7 +20,7 @@ const { createOllamaConfigStore } = require('./ollamaConfig');
 const { buildBobChatFallbackResponse, buildBobChatSkillInstructions } = require('./bobChatSkill');
 const { buildBobEmotionPrompt, heuristicBobEmotion, parseBobEmotionContract } = require('./bobEmotionSkill');
 const { BOB_ROUTER_SKILLS, buildBobRouterPrompt, heuristicBobRoute, isAutoModel, parseBobRouterContract, parseModelSizeB, sanitizeModelRules, selectBobModel, selectRouterModel } = require('./bobRouterSkill');
-const { shouldSearchWeb, extractSearchQuery, extractUserPromptFactoids, searchWeb, buildWebFallbackResponse, buildWebSummaryPrompt, hasUnsupportedWebClaims, isSearchDumpResponse } = require('./webSearch');
+const { shouldSearchWeb, extractSearchQuery, searchWeb, buildWebFallbackResponse, buildWebSummaryPrompt, hasUnsupportedWebClaims, isSearchDumpResponse } = require('./webSearch');
 const { BOB_CHAT_RESPONSE_CONTRACT, BOB_EMOTIONS, buildSkillInputContract, parseBobChatContract, parseJsonObject, parseSkillOutputContract } = require('./bobSkillContracts');
 const { createStreamingResponseSentenceEmitter, extractStreamingResponseText } = require('./bobStreamingText');
 const { getTtsProvider, getSupportedTtsProviders, getPiperConfigDetails, getPiperRuntimeStatus, getRhubarbRuntimeStatus, resolveTtsProvider, buildPiperEnv, splitTextForTts, synthesizePiperSpeech, synthesizePiperSpeechFile, generateRhubarbVisemes } = require('./tts');
@@ -1134,9 +1134,8 @@ function validateBobChatRawContract(rawOutput) {
   const isObject = Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed));
   const metadata = isObject ? parsed.metadata : null;
   const metadataIsObject = Boolean(metadata && typeof metadata === 'object' && !Array.isArray(metadata));
-  const factoidsIsArray = isObject && Array.isArray(parsed.factoids);
   const keys = isObject ? Object.keys(parsed).sort() : [];
-  const expectedKeys = ['factoids', 'metadata', 'response'];
+  const expectedKeys = ['metadata', 'response'];
   const emotion = metadataIsObject ? String(metadata.emotion || '').trim().toLowerCase() : '';
   const checks = [
     {
@@ -1144,7 +1143,7 @@ function validateBobChatRawContract(rawOutput) {
       pass: isObject
     },
     {
-      label: 'Only response, metadata, and factoids keys',
+      label: 'Only response and metadata keys',
       pass: isObject && keys.length === expectedKeys.length && expectedKeys.every(key => keys.includes(key))
     },
     {
@@ -1154,10 +1153,6 @@ function validateBobChatRawContract(rawOutput) {
     {
       label: 'Metadata is an object',
       pass: metadataIsObject
-    },
-    {
-      label: 'Factoids is an array',
-      pass: factoidsIsArray
     },
     {
       label: 'Emotion is allowed',
@@ -1188,13 +1183,6 @@ function applyBobChatFallbackIfNeeded({ req, prompt, contract, rawOutput }) {
     },
     factoids: []
   };
-}
-
-function extractResponseFactoids(rawOutput) {
-  const parsed = parseJsonObject(rawOutput);
-  if (Array.isArray(parsed?.factoids)) return parsed.factoids;
-  if (Array.isArray(parsed?.output?.factoids)) return parsed.output.factoids;
-  return [];
 }
 
 function bobContextUsageKey(req, conversationId = 'default') {
@@ -1582,10 +1570,7 @@ async function classifyBobEmotion({ model, prompt, response, recentMessages = []
 }
 
 async function buildBobPromptContext({ req, prompt, conversationId = 'default' }) {
-  const [summaries, factoids] = await Promise.all([
-    memory.getSummaries({ req }),
-    memory.getFactoids({ req, limit: 50 })
-  ]);
+  const summaries = await memory.getSummaries({ req });
   const history = typeof memory.getUnprocessedMessages === 'function'
     ? await memory.getUnprocessedMessages({
       req,
@@ -1595,12 +1580,12 @@ async function buildBobPromptContext({ req, prompt, conversationId = 'default' }
     })
     : await memory.getRecent({ req, conversationId });
   const promptHistory = withoutDuplicateCurrentTurn(history, prompt);
-  const promptWithMemory = memory.buildPrompt(prompt, promptHistory, summaries, factoids, {
+  const promptWithMemory = memory.buildPrompt(prompt, promptHistory, summaries, [], {
     systemInstructions: req.ai?.systemInstructions || []
   });
 
   return {
-    factoids,
+    factoids: [],
     history: promptHistory,
     promptWithMemory,
     summaries
@@ -1631,7 +1616,23 @@ async function runWebSearchSkill({ req, model, prompt, query: routedQuery = '', 
     think: false,
     reason: 'web-search-summary',
     ...(typeof onLiveOutput === 'function' ? {
-      onChunk: (chunk, info = {}) => onLiveOutput({ stage: 'response-stage', skill: 'web-search', chunk, accumulated: info.accumulated || chunk })
+      onChunk: (chunk, info = {}) => onLiveOutput({
+        stage: 'response-stage',
+        skill: 'web-search',
+        chunk,
+        accumulated: info.accumulated || chunk,
+        responseText: info.responseText || '',
+        responseDelta: info.responseDelta || '',
+        responseSentences: info.responseSentences || []
+      }),
+      onResponseSentence: (sentence, info = {}) => onLiveOutput({
+        stage: 'response-stage',
+        skill: 'web-search',
+        speech: sentence,
+        accumulated: info.accumulated || '',
+        responseText: info.responseText || '',
+        final: Boolean(info.final)
+      })
     } : {})
   });
   const fallback = buildWebFallbackResponse(query, results);
@@ -1642,10 +1643,6 @@ async function runWebSearchSkill({ req, model, prompt, query: routedQuery = '', 
     data: { query },
     sources: results
   });
-  contract.output.factoids = mergeFactoidCandidates(
-    extractResponseFactoids(rawSummary),
-    extractUserPromptFactoids(prompt)
-  );
   contract.output.data = { query, ...(contract.output.data || {}) };
   contract.output.data.query = query;
   const hasPlaceholderSources = contract.output.sources.some(source =>
@@ -1663,7 +1660,7 @@ async function runWebSearchSkill({ req, model, prompt, query: routedQuery = '', 
     results,
     inputContract,
     outputContract: contract,
-    factoids: contract.output.factoids || [],
+    factoids: [],
     response: contract.output.response || fallback,
     metadata: contract.output.metadata,
     sources: contract.output.sources,
@@ -2225,20 +2222,6 @@ function normalizeChatFactoids(factoids = []) {
     .filter(item => item.fact);
 }
 
-function mergeFactoidCandidates(...groups) {
-  const merged = [];
-  const seen = new Set();
-  for (const group of groups) {
-    for (const item of normalizeChatFactoids(group)) {
-      const key = item.factKey || item.fact.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push(item);
-    }
-  }
-  return merged;
-}
-
 async function persistBobAssistantMessage({ req, model, response, metadata, route, trace, sourceMessageId, factoids = [] }) {
   const responseFactoids = normalizeChatFactoids(factoids);
   const assistantMessage = await memory.addMessage({
@@ -2327,13 +2310,7 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
           response: 'text shown to the user',
           metadata: { emotion: 'focused' },
           data: { query: 'search query' },
-          sources: [{ title: 'source title', url: 'https://source', snippet: 'short snippet' }],
-          factoids: [{
-            factKey: 'short-stable-key',
-            category: 'preference|project|identity|environment|workflow|constraint|general',
-            fact: 'The user ...',
-            confidence: 0
-          }]
+          sources: [{ title: 'source title', url: 'https://source', snippet: 'short snippet' }]
         }
       },
       input: search.ollamaInput,
@@ -2361,7 +2338,7 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
       skills: responseMetadata.skills,
       inputContract: search.inputContract,
       outputContract: search.outputContract,
-      factoids: search.factoids || [],
+      factoids: route.factoids || [],
       query: search.query,
       sources: search.sources,
       llm: trace,
@@ -2377,7 +2354,7 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
         route,
         trace,
         sourceMessageId: persistedUserMessage?.id,
-        factoids: search.factoids || []
+        factoids: route.factoids || []
       });
     }
     return result;
@@ -2475,7 +2452,7 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
     parsed: {
       response: bobContract.response,
       metadata: bobContract.metadata,
-      factoids: bobContract.factoids || [],
+      factoids: route.factoids || [],
       model,
       generate: actualGenerate,
       rawGenerate: rawBobGenerate
@@ -2499,7 +2476,7 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
     validation,
     route,
     response: bobContract.response,
-    factoids: bobContract.factoids || [],
+    factoids: route.factoids || [],
     metadata: {
       ...responseMetadata,
       ...skillDebugMetadata(req, traceToSkillDebug(trace))
@@ -2528,7 +2505,7 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
       route,
       trace,
       sourceMessageId: persistedUserMessage?.id,
-      factoids: bobContract.factoids || []
+      factoids: route.factoids || []
     });
   }
 
