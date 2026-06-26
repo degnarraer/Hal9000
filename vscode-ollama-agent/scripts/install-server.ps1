@@ -208,29 +208,153 @@ function Test-DockerReady {
   }
 }
 
+function Ensure-NpmDependencies {
+  Write-Step "Checking Node dependencies"
+
+  if ($CheckOnly) {
+    if (Test-Path "node_modules") {
+      Write-Host "[ok] node_modules exists"
+    } else {
+      Write-Host "[missing] node_modules" -ForegroundColor Yellow
+    }
+    return
+  }
+
+  if (-not (Test-Command npm.cmd)) {
+    throw "npm.cmd is required to install project dependencies."
+  }
+
+  Write-Host "[install] npm.cmd install"
+  & npm.cmd install
+}
+
 function Ensure-EnvFile {
   if (Test-Path ".env") {
     Write-Host "[ok] .env exists"
+  } elseif ($CheckOnly) {
+    Write-Host "[missing] .env" -ForegroundColor Yellow
+  } else {
+    Copy-Item ".env.example" ".env"
+    Write-Host "[created] .env from .env.example"
+  }
+  Sync-EnvFileDefaults -Path ".env" -ExamplePath ".env.example"
+
+  $prodEnv = Join-Path "env" "prod.env"
+  $prodExample = Join-Path "env" "prod.env.example"
+  if (Test-Path $prodEnv) {
+    Write-Host "[ok] env/prod.env exists"
+  } elseif ($CheckOnly) {
+    Write-Host "[missing] env/prod.env" -ForegroundColor Yellow
+    return
+  } elseif (Test-Path $prodExample) {
+    Copy-Item $prodExample $prodEnv
+    Write-Host "[created] env/prod.env from env/prod.env.example"
+  }
+
+  Sync-EnvFileDefaults -Path $prodEnv -ExamplePath $prodExample
+}
+
+function Read-EnvAssignments {
+  param([string]$Path)
+
+  $assignments = [ordered]@{}
+  if (-not (Test-Path $Path)) { return $assignments }
+
+  foreach ($line in Get-Content -LiteralPath $Path) {
+    if ($line -match '^\s*#') { continue }
+    if ($line -notmatch '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') { continue }
+    $key = $Matches[1]
+    $value = $Matches[2]
+    if (-not $assignments.Contains($key)) {
+      $assignments[$key] = $value
+    }
+  }
+
+  return $assignments
+}
+
+function Sync-EnvFileDefaults {
+  param(
+    [string]$Path,
+    [string]$ExamplePath
+  )
+
+  if (-not (Test-Path $Path) -or -not (Test-Path $ExamplePath)) { return }
+
+  $current = Read-EnvAssignments -Path $Path
+  $defaults = Read-EnvAssignments -Path $ExamplePath
+  $missing = @($defaults.Keys | Where-Object { -not $current.Contains($_) })
+
+  if ($missing.Count -eq 0) {
+    Write-Host "[ok] $Path includes all example env keys"
     return
   }
 
   if ($CheckOnly) {
-    Write-Host "[missing] .env" -ForegroundColor Yellow
+    Write-Host "[missing] $Path env keys: $($missing -join ', ')" -ForegroundColor Yellow
     return
   }
 
-  Copy-Item ".env.example" ".env"
-  Write-Host "[created] .env from .env.example"
+  $lines = @('', "# Added from $ExamplePath by install-server.ps1.")
+  foreach ($key in $missing) {
+    $lines += "$key=$($defaults[$key])"
+  }
+  Add-Content -LiteralPath $Path -Value ($lines -join [Environment]::NewLine)
+  Write-Host "[updated] $Path added env keys: $($missing -join ', ')"
+}
+
+function Ensure-PiperVoiceDirectory {
+  $voiceDir = Join-Path (Get-Location) "voices"
+  if (-not (Test-Path $voiceDir)) {
+    if ($CheckOnly) {
+      Write-Host "[missing] voices directory for Piper model mount" -ForegroundColor Yellow
+      return
+    }
+
+    New-Item -ItemType Directory -Path $voiceDir | Out-Null
+    Write-Host "[created] voices directory for Piper model mount"
+  } else {
+    Write-Host "[ok] voices directory exists"
+  }
+
+  $expectedFiles = @(
+    "en_US-lessac-medium.onnx",
+    "en_US-lessac-medium.onnx.json"
+  )
+
+  $missing = @()
+  foreach ($file in $expectedFiles) {
+    $path = Join-Path $voiceDir $file
+    if (Test-Path $path) {
+      Write-Host "[ok] voices/$file"
+    } else {
+      Write-Host "[missing] voices/$file" -ForegroundColor Yellow
+      $missing += $file
+    }
+  }
+
+  if ($missing.Count -eq 0 -or $CheckOnly) {
+    return
+  }
+
+  $installer = Join-Path $PSScriptRoot "install-piper-voice.ps1"
+  if (-not (Test-Path $installer)) {
+    throw "Missing Piper voice installer script: $installer"
+  }
+
+  Write-Host "[install] Piper voice files"
+  & powershell -ExecutionPolicy Bypass -File $installer -VoiceDir "voices"
 }
 
 function Show-NextSteps {
   Write-Step "Next steps"
   Write-Host "1. Edit .env and replace change-me-before-production values."
-  Write-Host "2. If WSL was installed or Windows features changed, reboot."
-  Write-Host "3. Run: npm install"
-  Write-Host "4. Run: npm run docker:start"
-  Write-Host "5. Run: npm run docker:config"
-  Write-Host "6. Run: npm run docker:up"
+  Write-Host "2. Edit env/prod.env and replace replace-with-generated-secret values."
+  Write-Host "3. Confirm Piper voice model files exist under ./voices."
+  Write-Host "4. If WSL was installed or Windows features changed, reboot."
+  Write-Host "5. Run: npm run docker:start"
+  Write-Host "6. Run: npm run docker:config"
+  Write-Host "7. Run: npm run docker:up"
 
   if ($script:PathChanged -or $script:PackagesInstalled) {
     Write-Host ""
@@ -267,6 +391,8 @@ Test-WindowsFeatureState -FeatureName "HypervisorPlatform"
 
 Write-Step "Checking project files"
 Ensure-EnvFile
+Ensure-PiperVoiceDirectory
+Ensure-NpmDependencies
 
 Write-Step "Checking virtualization support"
 $virtualizationScript = Join-Path $PSScriptRoot "test-virtualization.ps1"

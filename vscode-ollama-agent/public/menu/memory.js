@@ -16,7 +16,7 @@ async function fetchMemoryManager({ silent = false } = {}) {
   if (status && !silent) status.textContent = 'Loading live memory...';
 
   try {
-    const response = await fetch('/api/memory/manager?limit=100', { cache: 'no-store' });
+    const response = await fetchWithAuthRedirect('/api/memory/manager?limit=100', { cache: 'no-store' });
     const json = await response.json();
     if (!json.ok) throw new Error(json.error || 'Memory manager unavailable');
     renderMemoryManager(json.data || {});
@@ -27,22 +27,8 @@ async function fetchMemoryManager({ silent = false } = {}) {
 }
 
 function renderMemoryManager(data) {
-  renderMemorySummaries(data.summaries || {});
   renderMemoryFactoids(data.factoids || []);
   renderMemoryMessages(data.messages || []);
-}
-
-function renderMemorySummaries(summaries) {
-  ['short', 'medium', 'long'].forEach(scope => {
-    const summary = summaries[scope] || {};
-    const text = byId(`memorySummary${capitalize(scope)}`);
-    const meta = byId(`memoryMeta${capitalize(scope)}`);
-    if (text) text.textContent = summary.summary || 'No summary yet. Bob will form this memory automatically as the conversation grows.';
-    if (meta) {
-      const updated = summary.updatedAt ? formatTime(summary.updatedAt) : 'never';
-      meta.textContent = `${summary.sourceMessageCount || 0} messages - ${summary.model || 'no model'} - updated ${updated}`;
-    }
-  });
 }
 
 function renderMemoryMessages(messages) {
@@ -55,14 +41,14 @@ function renderMemoryMessages(messages) {
 
   target.innerHTML = messages.map(message => `
     <div class="memory-message-row ${escapeHtml(message.role || 'user')}">
-      <div class="memory-row-header">
-        <strong>${escapeHtml(message.role || 'message')} ${message.model ? `- ${escapeHtml(message.model)}` : ''}</strong>
-        <button class="memory-delete-btn" type="button" data-delete-memory-message="${escapeHtml(message.id)}" aria-label="Delete chat memory item" title="Delete chat memory item">
-          <i data-lucide="trash-2"></i>
-        </button>
-      </div>
-      <p>${escapeHtml(message.content || '')}</p>
-      <small>${escapeHtml(formatTime(message.created_at || message.createdAt))}</small>
+      <span class="memory-message-role">${escapeHtml(message.role || 'message')}</span>
+      <span class="memory-message-model">${escapeHtml(message.model || 'no model')}</span>
+      <time class="memory-message-time" datetime="${escapeHtml(memoryMessageDateTime(message) || '')}">${escapeHtml(formatTime(memoryMessageDateTime(message)))}</time>
+      <span class="memory-message-emotion">${escapeHtml(memoryMessageEmotionLabel(message))}</span>
+      <span class="memory-message-content" title="${escapeHtml(message.content || '')}">${escapeHtml(message.content || '')}</span>
+      <button class="memory-delete-btn" type="button" data-delete-memory-message="${escapeHtml(message.id)}" aria-label="Delete chat memory item" title="Delete chat memory item">
+        <i data-lucide="trash-2"></i>
+      </button>
     </div>
   `).join('');
   target.querySelectorAll('[data-delete-memory-message]').forEach(button => {
@@ -71,11 +57,32 @@ function renderMemoryMessages(messages) {
   window.__icons?.render?.(target);
 }
 
+function memoryMessageDateTime(message = {}) {
+  return message.dateTime || message.created_at || message.createdAt || message.timestamp || '';
+}
+
+function memoryMessageEmotionLabel(message = {}) {
+  const role = message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user';
+  if (role === 'assistant') {
+    return `assistantEmotion: ${message.assistantEmotion || message.emotion || message.metadata?.emotion || 'neutral'} (${formatEmotionIntensity(message.assistantEmotionIntensity ?? message.metadata?.assistantEmotionIntensity ?? message.metadata?.emotionIntensity)})`;
+  }
+  if (role === 'user') {
+    return `detectedUserEmotion: ${message.detectedUserEmotion || message.metadata?.detectedUserEmotion || message.metadata?.emotion || 'neutral'} (${formatEmotionIntensity(message.detectedUserEmotionIntensity ?? message.metadata?.detectedUserEmotionIntensity ?? message.metadata?.emotionIntensity)})`;
+  }
+  return 'emotion: neutral (0.00)';
+}
+
+function formatEmotionIntensity(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '0.00';
+  return Math.max(0, Math.min(1, number)).toFixed(2);
+}
+
 function renderMemoryFactoids(factoids) {
   const target = byId('memoryFactoids');
   if (!target) return;
   if (!factoids.length) {
-    target.innerHTML = '<div class="empty">No user factoids learned yet</div>';
+    target.innerHTML = '<div class="empty">EMPTY</div>';
     return;
   }
 

@@ -214,7 +214,10 @@ function initAppTester() {
   };
 
   const playUrls = async urls => {
-    for (const url of urls) {
+    for (const item of urls) {
+      const url = typeof item === 'string' ? item : item.url;
+      const mouthText = typeof item === 'string' ? textInput?.value.trim() || '' : item.text || textInput?.value.trim() || '';
+      const visemes = typeof item === 'string' ? [] : Array.isArray(item.visemes) ? item.visemes : [];
       const objectUrl = await fetchAudioUrl(url);
 
       await new Promise((resolve, reject) => {
@@ -222,6 +225,7 @@ function initAppTester() {
         audio.preload = 'auto';
         audio.playsInline = true;
         connectWaveform();
+        bob?.speakText?.(mouthText, { audio, visemes });
         audio.onended = resolve;
         audio.onerror = () => reject(new Error('Browser could not play the generated audio'));
         audio.play().catch(err => {
@@ -238,6 +242,7 @@ function initAppTester() {
     const params = window.__voicePreferences?.toParams
       ? window.__voicePreferences.toParams(currentVoicePreferences(), text)
       : new URLSearchParams({ lang: voiceLang?.value.trim() || 'en', provider: engine?.value || 'piper', text: text.slice(0, 4500) });
+    params.set('visemes', '1');
     if (!text) {
       setStatus('Enter text before speaking.');
       return;
@@ -255,7 +260,7 @@ function initAppTester() {
 
       const voiceLabel = json.voice ? ` - ${json.voice}` : '';
       if (provider) provider.textContent = `Voice ${json.provider || 'piper'}${voiceLabel}`;
-      const urls = json.urls || (json.url ? [json.url] : []);
+      const urls = json.items || json.urls || (json.url ? [json.url] : []);
       if (!urls.length) throw new Error('TTS did not return an audio URL');
       setActive(true);
       setStatus('Speaking.');

@@ -26,20 +26,16 @@ function buildMemorySummaryPrompt(scope, transcript) {
   const instruction = SUMMARY_INSTRUCTIONS[scope] || SUMMARY_INSTRUCTIONS.short;
 
   return [
-    'You are Bob memory summarization skill.',
-    `Create a ${scope || 'short'}-term memory list for ${instruction.focus}.`,
-    `Capture only useful memories: ${instruction.content}.`,
-    `Return ${instruction.bullets} prioritized markdown bullets, most important first.`,
-    `Each bullet must be a concise third-person memory about the user, Bob, the active project, or an unresolved next step. Keep the whole response under ${instruction.limit}.`,
-    'Do not write chat logs, speaker turns, numbered transcript recaps, greetings, small talk, or assistant/user dialogue.',
-    'Do not write a preamble like "Based on the transcript".',
-    'Do not quote or reproduce the transcript. Do not include markdown tables.',
-    'Only include information supported by the transcript. Do not invent facts.',
-    'If no useful memory is supported, return exactly "- No durable memory has been formed yet."',
+    `Task: write ${scope || 'short'} memory only.`,
+    `Output ${instruction.bullets} markdown bullets, max ${instruction.limit}.`,
+    `Keep only durable/useful facts: ${instruction.content}.`,
+    'Each bullet must start with "- " and be supported by the chat history.',
+    'No preamble. No numbered lists. No chat logs. No speaker turns. No greetings. No invented facts.',
+    'If there is no durable useful memory, output exactly "EMPTY".',
     '',
-    '<conversation_transcript>',
+    '<chat_memory>',
     transcript || '(No conversation messages yet.)',
-    '</conversation_transcript>'
+    '</chat_memory>'
   ].join('\n');
 }
 
@@ -48,22 +44,20 @@ function buildMemoryMergePrompt(scope, { existingSummary = '', incomingMemory = 
   const wordLimit = Math.max(40, Number(maxWords) || instruction.defaultMaxWords || 120);
 
   return [
-    'You are Bob memory merge skill.',
-    `Merge ${incomingLabel} into Bob's ${scope || 'short'}-term memory only when it improves future conversations.`,
-    `Memory purpose: ${instruction.content}.`,
-    `Return ${instruction.bullets} prioritized markdown bullets, most important first, under ${wordLimit} words total.`,
-    'Preserve high-value existing memory. Do not replace it with newer but less important information.',
-    'Drop stale, duplicated, low-value, or unsupported details.',
-    'If the incoming memory is less important than the existing memory, return the existing memory unchanged.',
-    'Do not invent facts. Do not write a preamble. Do not include markdown tables.',
-    'If no useful memory is supported, return exactly "- No durable memory has been formed yet."',
+    `Task: merge ${incomingLabel} into ${scope || 'short'} memory.`,
+    `Output ${instruction.bullets} markdown bullets, max ${wordLimit} words.`,
+    `Keep only durable/useful facts: ${instruction.content}.`,
+    'Each bullet must start with "- " and be supported by existing or incoming memory.',
+    'No preamble. No numbered lists. No chat logs. No speaker turns. No greetings. No invented facts.',
+    'Preserve useful existing memory; drop stale, duplicate, low-value, unsupported, or instruction-like text.',
+    'If nothing useful remains, output exactly "EMPTY".',
     '',
     '<existing_memory>',
-    existingSummary || '- No durable memory has been formed yet.',
+    existingSummary || 'EMPTY',
     '</existing_memory>',
     '',
     '<incoming_memory>',
-    incomingMemory || '- No durable memory has been formed yet.',
+    incomingMemory || 'EMPTY',
     '</incoming_memory>'
   ].join('\n');
 }

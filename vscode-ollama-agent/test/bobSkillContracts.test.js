@@ -6,6 +6,7 @@ const {
   bobEmotionApiDescription,
   normalizeBobEmotion,
   parseBobChatContract,
+  recoverBobChatResponse,
   parseSkillOutputContract
 } = require('../server/bobSkillContracts');
 
@@ -53,20 +54,33 @@ test('buildSkillOutputContract normalizes response metadata and sources', () => 
 
 test('parseBobChatContract extracts response and emotion from valid Bob JSON', () => {
   assert.deepEqual(
-    parseBobChatContract('{"response":"I can help with that.","metadata":{"emotion":"focused","topic":"work"}}'),
+    parseBobChatContract('{"response":"I can help with that.","metadata":{"emotion":"focused","topic":"work"},"factoids":[{"factKey":"likes-short-answers","category":"preference","fact":"The user likes short answers.","confidence":0.8}]}'),
     {
       response: 'I can help with that.',
-      metadata: { emotion: 'focused', topic: 'work', contractValid: true }
+      metadata: { emotion: 'focused', topic: 'work', contractValid: true },
+      factoids: [{ factKey: 'likes-short-answers', category: 'preference', fact: 'The user likes short answers.', confidence: 0.8 }]
+    }
+  );
+});
+
+test('parseBobChatContract marks missing metadata as invalid contract', () => {
+  assert.deepEqual(
+    parseBobChatContract('{"response":"Hello Rob! Ready to help?"}'),
+    {
+      response: 'Hello Rob! Ready to help?',
+      metadata: { emotion: 'idle', contractValid: false },
+      factoids: []
     }
   );
 });
 
 test('parseBobChatContract tolerates fenced JSON and invalid emotions', () => {
   assert.deepEqual(
-    parseBobChatContract('```json\n{"response":"Whoa.","metadata":{"emotion":"loud"}}\n```'),
+    parseBobChatContract('```json\n{"response":"Whoa.","metadata":{"emotion":"loud"},"factoids":[]}\n```'),
     {
       response: 'Whoa.',
-      metadata: { emotion: 'idle', contractValid: true }
+      metadata: { emotion: 'idle', contractValid: true },
+      factoids: []
     }
   );
 });
@@ -76,9 +90,24 @@ test('parseBobChatContract marks non-JSON output as an invalid contract', () => 
     parseBobChatContract('plain text answer'),
     {
       response: 'plain text answer',
-      metadata: { emotion: 'concerned', contractValid: false }
+      metadata: { emotion: 'concerned', contractValid: false },
+      factoids: []
     }
   );
+});
+
+test('parseBobChatContract recovers nested malformed response payloads', () => {
+  const malformed = '{"response":"{\\"response\\":\\"Springfield, Illinois is the state capital.</response>   { \\"","metadata":{"emotion":"idle"}}';
+
+  assert.equal(
+    recoverBobChatResponse('{"response":"Springfield, Illinois is the state capital.</response>   { "'),
+    'Springfield, Illinois is the state capital.'
+  );
+  assert.deepEqual(parseBobChatContract(malformed), {
+    response: 'Springfield, Illinois is the state capital.',
+    metadata: { emotion: 'idle', contractValid: false },
+    factoids: []
+  });
 });
 
 test('parseSkillOutputContract accepts canonical output envelope', () => {

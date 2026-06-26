@@ -1,0 +1,153 @@
+<section class="panel-view bob-chat-tester-view">
+  <div class="monitor-toolbar">
+    <h3>Bob Chat Tester</h3>
+    <button id="bobChatDebugCopy" class="bob-chat-debug-copy" type="button" disabled>
+      <i data-lucide="copy"></i>
+      Copy Debug
+    </button>
+    <span id="bobChatContractBadge" class="bob-chat-contract-badge idle">Not tested</span>
+    <span id="bobChatTesterStatus" class="stream-status">Idle</span>
+  </div>
+
+  <div class="bob-chat-tester-grid">
+    <section class="monitor-card bob-chat-runner">
+      <div class="bob-chat-test-conversation">
+        <div id="bobChatTestMessages" class="bob-chat-test-messages" aria-live="polite"></div>
+
+        <form id="bobChatTestForm" class="bob-chat-test-form" action="javascript:;">
+          <input id="bobChatTestPrompt" autocomplete="off" enterkeyhint="send" placeholder="Type a message for Bob to evaluate." />
+          <button id="bobChatTestSend" type="submit">
+            <i data-lucide="send"></i>
+            Send
+          </button>
+        </form>
+      </div>
+
+      <aside class="bob-chat-test-rail" aria-label="Bob chat tester controls">
+        <div class="bob-chat-test-controls">
+          <label for="bobChatTestModel">
+            <span>Model</span>
+            <select id="bobChatTestModel"></select>
+          </label>
+          <button id="bobChatTestRefreshModels" type="button" aria-label="Refresh models" title="Refresh models">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+        </div>
+
+        <div class="tester-actions">
+          <div class="tester-action-group">
+            <span>Run</span>
+          <button id="bobChatTestRerun" type="button">
+            <i data-lucide="rotate-cw"></i>
+            Rerun
+          </button>
+          <button id="bobChatTestClear" type="button">
+            <i data-lucide="trash-2"></i>
+            Clear
+          </button>
+          </div>
+          <div class="tester-action-group">
+            <span>Stages</span>
+          <button id="bobChatRouterStage" type="button">
+            <i data-lucide="route"></i>
+            Router Stage
+          </button>
+          <button id="bobChatResponseStage" type="button">
+            <i data-lucide="braces"></i>
+            Response Stage
+          </button>
+          </div>
+          <div class="tester-action-group">
+            <span>Skills</span>
+          <button id="bobChatSkillEdit" type="button">
+            <i data-lucide="message-square-text"></i>
+            Bob Chat Skill
+          </button>
+          <button id="bobWebSearchSkillEdit" type="button">
+            <i data-lucide="search"></i>
+            Web Search Skill
+          </button>
+          </div>
+        </div>
+
+      <div id="bobChatPresetGrid" class="bob-chat-preset-grid" aria-label="Preset test questions"></div>
+      </aside>
+    </section>
+
+    <section class="monitor-card bob-chat-face-card tester-bob-card" aria-label="Bob chat tester face">
+      <div class="tester-bob-display">
+        <div class="tester-bob-face-shell">
+          <svg id="bobChatTesterFace" class="bob-face tester-bob-face" viewBox="0 0 512 512">
+          <rect width="512" height="512" rx="96" fill="#020712"/>
+          <g id="bobHead">
+            <path id="bobHeadTop" d="M64 64h384l-32-32H96Z" fill="#1f3f82" opacity=".6"/>
+            <path id="bobHeadRight" d="M416 64l32-32v448l-32-32Z" fill="#1f3f82" opacity=".52"/>
+            <path id="bobHeadBottom" d="M64 448h384l-32 32H96Z" fill="#1f3f82" opacity=".48"/>
+            <path id="bobHeadLeft" d="M64 64L32 32v448l32-32Z" fill="#1f3f82" opacity=".22"/>
+            <rect id="bobHeadFront" x="64" y="64" width="384" height="384" rx="64" fill="#071229" stroke="#00e0ff" stroke-width="10"/>
+          </g>
+          <g id="bobFaceFeatures">
+            <g id="bobForehead">
+              <path id="bobForeheadLine1" d="M160 104 Q256 94 352 104" stroke="#dfe9ff" stroke-width="7" stroke-linecap="round" fill="none" opacity=".16"/>
+              <path id="bobForeheadLine2" d="M186 126 Q256 119 326 126" stroke="#dfe9ff" stroke-width="5" stroke-linecap="round" fill="none" opacity=".1"/>
+            </g>
+            <g id="bobBrow">
+              <path id="bobLeftBrow" d="M124 150h104" stroke="#00e0ff" stroke-width="16" stroke-linecap="round" opacity=".72"/>
+              <path id="bobRightBrow" d="M284 150h104" stroke="#7c5cff" stroke-width="16" stroke-linecap="round" opacity=".72"/>
+            </g>
+            <g id="bobEyes">
+              <ellipse id="bobLeftEye" cx="186" cy="236" rx="34" ry="34" fill="#00e0ff"/>
+              <ellipse id="bobRightEye" cx="326" cy="236" rx="34" ry="34" fill="#7c5cff"/>
+              <path id="bobLeftEyeIcon" fill="#00e0ff" opacity="0"/>
+              <path id="bobRightEyeIcon" fill="#7c5cff" opacity="0"/>
+            </g>
+            <path id="bobMouth" d="M160 334h192" stroke="#dfe9ff" stroke-width="28" stroke-linecap="round" fill="none"/>
+          </g>
+          </svg>
+        </div>
+        <div class="tester-bob-ctx" aria-label="Context usage">
+          <canvas id="bobChatTesterContextChart"></canvas>
+          <small id="bobChatTesterContextStatus">CTX -</small>
+        </div>
+      </div>
+      <div class="tester-bob-meta">
+        <div class="tester-bob-title-row">
+          <strong>Bob Face</strong>
+          <button id="bobChatMemoryBrain" class="bob-brain-btn compact" type="button" aria-label="Open Bob memory" title="Bob memory">
+            <i data-lucide="brain"></i>
+          </button>
+        </div>
+        <small id="bobChatFaceStatus">Ready for streamed speech.</small>
+      </div>
+    </section>
+
+    <section class="monitor-card bob-chat-model-status-card">
+      <div class="bob-chat-card-header">
+        <h4>Loaded Models</h4>
+        <span id="bobChatModelStatusState" class="stream-status" data-state="busy">Connecting</span>
+      </div>
+      <div id="bobChatModelStatusSummary" class="bob-chat-model-status-summary"></div>
+      <div id="bobChatModelStatusList" class="bob-chat-model-status-list" aria-live="polite"></div>
+    </section>
+
+    <section class="monitor-card bob-chat-live-card">
+      <div class="bob-chat-card-header">
+        <h4>Live Stream Output</h4>
+        <span id="bobChatLiveStatus" class="stream-status">Idle</span>
+      </div>
+      <pre id="bobChatLiveOutput" class="bob-chat-live-output">No live output yet.</pre>
+    </section>
+
+    <section class="monitor-card bob-chat-llm-card">
+      <div class="bob-chat-card-header">
+        <h4>LLM Inputs and Outputs</h4>
+        <button id="bobChatLlmCopy" class="bob-chat-debug-copy" type="button" disabled>
+          <i data-lucide="copy"></i>
+          Copy IO
+        </button>
+      </div>
+      <div id="bobChatLlmTrace" class="bob-chat-llm-trace"></div>
+    </section>
+
+  </div>
+</section>

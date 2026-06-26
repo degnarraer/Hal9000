@@ -82,7 +82,12 @@ function getPiperRuntimeStatus(env = process.env) {
   return {
     provider: 'piper',
     bin,
+    model,
+    config,
+    hasBin: Boolean(bin),
+    binExists: Boolean(bin && fs.existsSync(bin)),
     hasModel: Boolean(model),
+    modelExists: Boolean(model && fs.existsSync(model)),
     hasConfig: Boolean(config),
     configLoaded: Boolean(config && fs.existsSync(config))
   };
@@ -141,7 +146,7 @@ function buildPiperEnv(overrides = {}, env = process.env) {
   return merged;
 }
 
-function runCommandWithText({ bin, args, text, outPath, timeoutMs = 60000 }) {
+function runCommandWithText({ bin, args, text, outPath, timeoutMs = 60000, keepFile = false }) {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
       windowsHide: true,
@@ -173,6 +178,11 @@ function runCommandWithText({ bin, args, text, outPath, timeoutMs = 60000 }) {
         return;
       }
 
+      if (keepFile) {
+        resolve(outPath);
+        return;
+      }
+
       fs.readFile(outPath, (err, audio) => {
         fs.unlink(outPath, () => {});
         if (err) reject(err);
@@ -184,19 +194,119 @@ function runCommandWithText({ bin, args, text, outPath, timeoutMs = 60000 }) {
   });
 }
 
-async function synthesizePiperSpeech(text, env = process.env) {
-  const outPath = tempAudioPath('wav');
+function runPiperToFile({ text, outPath, env = process.env, keepFile = false }) {
   const bin = env.TTS_PIPER_BIN || env.PIPER_BIN || 'piper';
   const args = piperArgsForOutput(outPath, env);
-  const audio = await runCommandWithText({
+  return runCommandWithText({
     bin,
     args,
     text,
     outPath,
-    timeoutMs: Number(env.TTS_TIMEOUT_MS || 60000)
+    timeoutMs: Number(env.TTS_TIMEOUT_MS || 60000),
+    keepFile
   });
+}
+
+async function synthesizePiperSpeech(text, env = process.env) {
+  const outPath = tempAudioPath('wav');
+  const audio = await runPiperToFile({ text, outPath, env });
 
   return { audio, contentType: 'audio/wav', provider: 'piper' };
+}
+
+async function synthesizePiperSpeechFile(text, env = process.env) {
+  const outPath = tempAudioPath('wav');
+  await runPiperToFile({ text, outPath, env, keepFile: true });
+  return { path: outPath, contentType: 'audio/wav', provider: 'piper' };
+}
+
+function getRhubarbRuntimeStatus(env = process.env) {
+  const bin = env.TTS_RHUBARB_BIN || env.RHUBARB_BIN || '';
+  return {
+    provider: 'rhubarb',
+    bin,
+    configured: Boolean(bin),
+    binExists: Boolean(bin && fs.existsSync(bin))
+  };
+}
+
+function normalizeRhubarbCue(cue = {}) {
+  const value = String(cue.value || '').trim().toUpperCase();
+  const start = Number(cue.start);
+  const end = Number(cue.end);
+  if (!/^[A-HX]$/.test(value) || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  return {
+    start: Math.max(0, start),
+    end: Math.max(0, end),
+    value: value === 'X' ? 'H' : value
+  };
+}
+
+function parseRhubarbVisemes(value) {
+  const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+  const cues = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.mouthCues)
+      ? parsed.mouthCues
+      : [];
+  return cues.map(normalizeRhubarbCue).filter(Boolean);
+}
+
+function generateRhubarbVisemes(audioPath, env = process.env) {
+  const bin = env.TTS_RHUBARB_BIN || env.RHUBARB_BIN;
+  if (!bin) {
+    const err = new Error('Rhubarb is not configured. Set TTS_RHUBARB_BIN or RHUBARB_BIN.');
+    err.code = 'RHUBARB_NOT_CONFIGURED';
+    throw err;
+  }
+
+  const outPath = tempAudioPath('json');
+  const timeoutMs = Number(env.TTS_RHUBARB_TIMEOUT_MS || 30000);
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, ['-f', 'json', '-o', outPath, audioPath], {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe']
+    });
+    let stderr = '';
+    let settled = false;
+    const timeout = setTimeout(() => {
+      settled = true;
+      child.kill();
+      fs.unlink(outPath, () => {});
+      reject(new Error(`${bin} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    child.on('error', err => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      fs.unlink(outPath, () => {});
+      reject(err);
+    });
+    child.on('close', code => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (code !== 0) {
+        fs.unlink(outPath, () => {});
+        reject(new Error(stderr.trim() || `${bin} exited with ${code}`));
+        return;
+      }
+
+      fs.readFile(outPath, 'utf8', (err, json) => {
+        fs.unlink(outPath, () => {});
+        if (err) reject(err);
+        else {
+          try {
+            resolve(parseRhubarbVisemes(json));
+          } catch (parseErr) {
+            reject(parseErr);
+          }
+        }
+      });
+    });
+  });
 }
 
 module.exports = {
@@ -204,9 +314,13 @@ module.exports = {
   getSupportedTtsProviders,
   getPiperConfigDetails,
   getPiperRuntimeStatus,
+  getRhubarbRuntimeStatus,
   resolveTtsProvider,
   buildPiperEnv,
+  generateRhubarbVisemes,
+  parseRhubarbVisemes,
   piperArgsForOutput,
   splitTextForTts,
-  synthesizePiperSpeech
+  synthesizePiperSpeech,
+  synthesizePiperSpeechFile
 };

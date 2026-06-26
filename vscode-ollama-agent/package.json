@@ -49,6 +49,7 @@
     "server:install:full": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -Full",
     "server:install:wsl": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -InstallWsl",
     "server:install:persist-path": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -PersistPath",
+    "server:install:piper": "powershell -ExecutionPolicy Bypass -File scripts/install-piper-voice.ps1",
     "server:check": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -CheckOnly"
   },
   "keywords": [

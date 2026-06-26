@@ -28,6 +28,14 @@ class BobExpressionEngine {
       nextAt: 0,
       ease: 0.025
     };
+    this.viseme = {
+      active: false,
+      current: 'H',
+      cues: [],
+      startedAt: 0,
+      durationMs: 0,
+      audio: null
+    };
     this.parts = {};
 
     if (!this.root) return;
@@ -174,6 +182,7 @@ class BobExpressionEngine {
   stopSpeaking() {
     this.speaking = false;
     this.root?.removeAttribute('data-speaking');
+    this.stopVisemeSpeech();
     this.setMouthLevel(0);
     this.drawMouth();
   }
@@ -181,6 +190,51 @@ class BobExpressionEngine {
   setMouthLevel(level = 0) {
     this.mouthLevel = Math.max(0, Math.min(1, Number(level) || 0));
     this.drawMouth();
+  }
+
+  speakText(text = '', options = {}) {
+    const phrase = String(text || '').trim();
+    if (!phrase) return;
+    const explicitCues = Array.isArray(options.visemes)
+      ? options.visemes
+        .map(cue => ({
+          value: String(cue?.value || 'H').trim().toUpperCase(),
+          start: Math.max(0, Number(cue?.start) || 0) * 1000,
+          end: Math.max(0, Number(cue?.end) || 0) * 1000
+        }))
+        .filter(cue => /^[A-H]$/.test(cue.value) && cue.end > cue.start)
+      : [];
+    const cues = explicitCues.length ? explicitCues : this.buildVisemeCues(phrase);
+    if (!cues.length) return;
+    const durationMs = Math.max(
+      220,
+      Number(options.durationMs) ||
+      (Number.isFinite(options.audio?.duration) && options.audio.duration > 0 ? options.audio.duration * 1000 : 0) ||
+      cues[cues.length - 1].end
+    );
+    const sourceDuration = Math.max(1, cues[cues.length - 1].end);
+    const scale = explicitCues.length ? 1 : durationMs / sourceDuration;
+    this.viseme = {
+      active: true,
+      current: cues[0].value,
+      cues: cues.map(cue => ({
+        value: cue.value,
+        start: cue.start * scale,
+        end: cue.end * scale
+      })),
+      startedAt: performance.now(),
+      durationMs,
+      audio: options.audio || null
+    };
+    this.startSpeaking();
+    this.drawMouth();
+  }
+
+  stopVisemeSpeech() {
+    this.viseme.active = false;
+    this.viseme.current = 'H';
+    this.viseme.cues = [];
+    this.viseme.audio = null;
   }
 
   start() {
@@ -234,7 +288,9 @@ class BobExpressionEngine {
     this.drawBrow();
 
     if (this.shouldBlink(time)) this.blink();
-    if (this.speaking && this.mouthLevel === 0) {
+    this.updateViseme(time);
+
+    if (this.speaking && !this.viseme.active && this.mouthLevel === 0) {
       this.setMouthLevel(0.12 + (Math.sin(time / 76) + 1) * 0.36);
     } else {
       this.drawMouth();
@@ -325,11 +381,122 @@ class BobExpressionEngine {
     return min + Math.random() * (max - min);
   }
 
+  buildVisemeCues(text = '') {
+    const tokens = String(text || '')
+      .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+      .match(/[a-zA-Z]+|[0-9]+|[.,!?;:]+/g) || [];
+    const cues = [];
+    let cursor = 0;
+    const push = (value, duration = 76) => {
+      cues.push({ value, start: cursor, end: cursor + duration });
+      cursor += duration;
+    };
+
+    tokens.forEach(token => {
+      if (/^[.,!?;:]+$/.test(token)) {
+        push('H', /[.!?]/.test(token) ? 190 : 120);
+        return;
+      }
+      const wordVisemes = this.wordToVisemes(token);
+      wordVisemes.forEach(value => push(value, value === 'A' ? 54 : 74));
+      push('H', 38);
+    });
+
+    if (!cues.length || cues[cues.length - 1].value !== 'H') push('H', 80);
+    return cues;
+  }
+
+  wordToVisemes(word = '') {
+    const text = String(word || '').toLowerCase();
+    const values = [];
+    const push = value => {
+      if (value && values[values.length - 1] !== value) values.push(value);
+    };
+
+    for (let index = 0; index < text.length; index += 1) {
+      const pair = text.slice(index, index + 2);
+      if (['ph'].includes(pair)) {
+        push('G');
+        index += 1;
+        continue;
+      }
+      if (['th', 'sh', 'ch'].includes(pair)) {
+        push('G');
+        index += 1;
+        continue;
+      }
+      if (['oo', 'ou', 'ow'].includes(pair)) {
+        push('F');
+        index += 1;
+        continue;
+      }
+      if (['ee', 'ea', 'ai', 'ay'].includes(pair)) {
+        push('D');
+        index += 1;
+        continue;
+      }
+
+      const char = text[index];
+      if (/[pbm]/.test(char)) push('A');
+      else if (/[fv]/.test(char)) push('G');
+      else if (/[wq]/.test(char)) push('F');
+      else if (/[o]/.test(char)) push('E');
+      else if (/[aeu]/.test(char)) push('C');
+      else if (/[iy]/.test(char)) push('D');
+      else if (/[szx]/.test(char)) push('G');
+      else if (/[rln]/.test(char)) push('B');
+      else if (/[tdkgcj]/.test(char)) push('C');
+    }
+
+    return values.length ? values : ['C'];
+  }
+
+  updateViseme(time = performance.now()) {
+    if (!this.viseme.active) return;
+    const audio = this.viseme.audio;
+    let elapsed = time - this.viseme.startedAt;
+    if (audio && Number.isFinite(audio.currentTime)) {
+      elapsed = audio.currentTime * 1000;
+    }
+    const cue = this.viseme.cues.find(item => elapsed >= item.start && elapsed < item.end);
+    if (cue) {
+      this.viseme.current = cue.value;
+      return;
+    }
+    if (elapsed >= this.viseme.durationMs) {
+      this.viseme.current = 'H';
+      this.viseme.active = false;
+    }
+  }
+
+  drawVisemeMouth(value = 'H', level = 0) {
+    const mouth = this.parts.mouth;
+    if (!mouth) return;
+    const energy = Math.max(0, Math.min(1, Number(level) || 0));
+    const shapes = {
+      A: { d: 'M178 334h156', strokeWidth: 24, fill: 'none', linecap: 'round' },
+      B: { d: `M174 334 Q256 ${346 + energy * 8} 338 334`, strokeWidth: 24, fill: 'none', linecap: 'round' },
+      C: { d: `M188 328 Q256 ${292 - energy * 8} 324 328 Q256 ${380 + energy * 12} 188 328`, strokeWidth: 12, fill: 'rgba(223,233,255,0.18)', linecap: 'round' },
+      D: { d: `M168 326 Q256 ${306 - energy * 8} 344 326 Q256 ${370 + energy * 10} 168 326`, strokeWidth: 12, fill: 'rgba(223,233,255,0.16)', linecap: 'round' },
+      E: { d: `M218 328 Q256 ${296 - energy * 8} 294 328 Q256 ${372 + energy * 8} 218 328`, strokeWidth: 12, fill: 'rgba(223,233,255,0.18)', linecap: 'round' },
+      F: { d: `M226 330 Q256 ${306 - energy * 6} 286 330 Q256 ${362 + energy * 8} 226 330`, strokeWidth: 14, fill: 'rgba(223,233,255,0.2)', linecap: 'round' },
+      G: { d: `M172 326 Q256 ${350 + energy * 5} 340 326 M184 344 Q256 ${326 - energy * 3} 328 344`, strokeWidth: 14, fill: 'none', linecap: 'round' },
+      H: { d: 'M170 334 Q256 338 342 334', strokeWidth: 24, fill: 'none', linecap: 'round' }
+    };
+    const shape = shapes[value] || shapes.H;
+    this.setMouthStyle(shape);
+    mouth.setAttribute('d', shape.d);
+  }
+
   drawMouth() {
     const mouth = this.parts.mouth;
     if (!mouth) return;
 
     const activeMouthLevel = Math.max(this.mouthLevel, this.emotion === 'idle' ? this.idleMouthLevel : 0);
+    if (this.viseme.active) {
+      this.drawVisemeMouth(this.viseme.current, activeMouthLevel);
+      return;
+    }
     if (this.speaking || activeMouthLevel > 0) {
       const drop = 5 + activeMouthLevel * 46;
       const inset = activeMouthLevel * 28;

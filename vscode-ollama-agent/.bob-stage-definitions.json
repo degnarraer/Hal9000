@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "stages": {
+    "router": {
+      "title": "Router Stage",
+      "inputTemplate": {
+        "request": {
+          "requestId": "[REQUEST ID]",
+          "timestamp": "[REQUEST TIMESTAMP]",
+          "sessionId": "[SESSION ID]",
+          "userId": "[USER ID]"
+        },
+        "input": { "text": "[CHAT INPUT]", "language": "english" },
+        "user": { "name": "[USER NAME]", "factoids": [[FACTOIDS 5]] },
+        "memory": { "recentMessages": [[CHAT MEMORY 10]] },
+        "skills": {
+          "available": [[AVAILABLE SKILLS]]
+        }
+      },
+      "outputTemplate": {
+        "skill": null,
+        "query": null,
+        "reason": null,
+        "parameters": {}
+      },
+      "instructions": [
+        "Read the inputTemplate.",
+        "Select exactly one skill from skills.available.",
+        "Populate the outputTemplate.",
+        "Return only the outputTemplate as valid JSON.",
+        "Do not invent skill names."
+      ]
+    }
+  }
+}

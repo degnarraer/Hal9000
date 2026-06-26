@@ -332,13 +332,25 @@ function createSecurityMiddleware(logger, securityEvents = null) {
   async function startLogin(req, res) {
     markPassed(req, { name: 'auth-start' });
     if (!config.enabled) return res.redirect('/');
-    return redirectToProvider(req, res, 'login');
+    try {
+      return await redirectToProvider(req, res, 'login');
+    } catch (err) {
+      logger.error(`OIDC login redirect failed: ${err.message}`);
+      recordSecurity(req, { severity: 'critical', type: 'auth_provider_unavailable', status: 503, detail: err.message });
+      return res.status(503).send(authErrorPage('Sign in is unavailable because the configured identity provider could not be reached. Check the local auth server or disable security for local testing.'));
+    }
   }
 
   async function register(req, res) {
     markPassed(req, { name: 'auth-register' });
     if (!config.enabled) return res.redirect('/');
-    return redirectToProvider(req, res, 'register');
+    try {
+      return await redirectToProvider(req, res, 'register');
+    } catch (err) {
+      logger.error(`OIDC registration redirect failed: ${err.message}`);
+      recordSecurity(req, { severity: 'critical', type: 'auth_provider_unavailable', status: 503, detail: err.message });
+      return res.status(503).send(authErrorPage('Registration is unavailable because the configured identity provider could not be reached. Check the local auth server or disable security for local testing.'));
+    }
   }
 
   async function redirectToProvider(req, res, mode) {

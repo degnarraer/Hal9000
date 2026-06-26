@@ -90,8 +90,18 @@ services:
       MEMORY_HISTORY_LIMIT: ${MEMORY_HISTORY_LIMIT:-12}
       MEMORY_DB_PASSWORD: ${MEMORY_DB_PASSWORD:-change-me-before-production}
       MEMORY_DATABASE_URL: postgres://memory:${MEMORY_DB_PASSWORD:-change-me-before-production}@memory-db:5432/memory
+      TTS_PROVIDER: ${TTS_PROVIDER:-piper}
+      TTS_PIPER_BIN: ${TTS_PIPER_BIN:-/opt/piper/piper}
+      TTS_PIPER_MODEL: ${TTS_PIPER_MODEL:-}
+      TTS_PIPER_CONFIG: ${TTS_PIPER_CONFIG:-}
+      TTS_PIPER_SPEAKER: ${TTS_PIPER_SPEAKER:-}
+      TTS_PIPER_LENGTH_SCALE: ${TTS_PIPER_LENGTH_SCALE:-}
+      TTS_PIPER_NOISE_SCALE: ${TTS_PIPER_NOISE_SCALE:-}
+      TTS_PIPER_NOISE_W: ${TTS_PIPER_NOISE_W:-}
       ADMIN_BOOTSTRAP_USERS: ${ADMIN_BOOTSTRAP_USERS:-}
       ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:-}
+    volumes:
+      - ${TTS_PIPER_VOICE_DIR:-./voices}:/voices:ro
     networks:
       - app_net
     depends_on:
@@ -111,6 +121,7 @@ services:
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
+    gpus: all
     expose:
       - "11434"
     volumes:

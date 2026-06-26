@@ -4,6 +4,9 @@ const {
   shouldSearchWeb,
   extractSearchQuery,
   parseDuckDuckGoResults,
+  buildWebFallbackResponse,
+  hasUnsupportedWebClaims,
+  isSearchDumpResponse,
   buildWebSummaryPrompt
 } = require('../server/webSearch');
 
@@ -44,10 +47,43 @@ test('buildWebSummaryPrompt includes source links for ollama summarization', () 
     { title: 'Bob', url: 'https://example.com', snippet: 'A personal assistant.' }
   ]);
 
-  assert.match(prompt, /Use only the sources below/);
-  assert.match(prompt, /Skill input contract/);
+  assert.match(prompt, /using only the provided web search results/);
+  assert.match(prompt, /Input contract/);
   assert.match(prompt, /"contractVersion":1/);
   assert.match(prompt, /"skill":"web-search"/);
   assert.match(prompt, /"output":\{"response":"text shown to the user"/);
+  assert.match(prompt, /"factoids":\[/);
+  assert.match(prompt, /durable user facts explicitly supported by the user prompt/);
+  assert.match(prompt, /not a numbered search-results dump/);
+  assert.match(prompt, /ONLY use facts literally present/);
+  assert.match(prompt, /data\.query must be exactly "Bob"/);
+  assert.match(prompt, /never use placeholder source title/);
   assert.match(prompt, /https:\/\/example\.com/);
+});
+
+test('web fallback response synthesizes snippets instead of dumping sources', () => {
+  const response = buildWebFallbackResponse('springfield illinois', [
+    { title: 'Springfield, Illinois - Wikipedia', url: 'https://example.com/wiki', snippet: 'Springfield is the capital city of Illinois and the county seat of Sangamon County.' },
+    { title: 'Visit Springfield Illinois', url: 'https://example.com/visit', snippet: 'Springfield has breweries and tourism attractions.' }
+  ]);
+
+  assert.match(response, /capital city of Illinois/);
+  assert.match(response, /Visit Springfield Illinois/);
+  assert.equal(isSearchDumpResponse("The search results for 'x' are as follows: 1) Official site, URL: https://example.com"), true);
+  assert.equal(isSearchDumpResponse(response), false);
+});
+
+test('web claim check catches unsupported names and years', () => {
+  const results = [
+    { title: 'Springfield, Illinois - Wikipedia', url: 'https://example.com/wiki', snippet: 'Springfield is the capital city of Illinois and the county seat of Sangamon County. Its population was 114,394 at the 2020 United States census.' }
+  ];
+
+  assert.equal(
+    hasUnsupportedWebClaims('Springfield is the capital city of Illinois and had population 114,394 in 2020.', results),
+    false
+  );
+  assert.equal(
+    hasUnsupportedWebClaims('Springfield was founded in 1821 by John McClure and named after Springfield, Ohio.', results),
+    true
+  );
 });

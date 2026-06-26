@@ -28,10 +28,10 @@ test('defaultSummaries returns empty summaries for every scope', () => {
 test('memory summary prompt requires prioritized memory bullets instead of chat logs', () => {
   const prompt = buildMemorySummaryPrompt('medium', 'User: I prefer bulleted memory.\nAssistant: Got it.');
 
-  assert.match(prompt, /Return 4-7 prioritized markdown bullets, most important first\./);
-  assert.match(prompt, /Do not write chat logs, speaker turns, numbered transcript recaps/);
-  assert.match(prompt, /Each bullet must be a concise third-person memory/);
-  assert.match(prompt, /If no useful memory is supported, return exactly "- No durable memory has been formed yet\."/);
+  assert.match(prompt, /Task: write medium memory only\./);
+  assert.match(prompt, /Output 4-7 markdown bullets/);
+  assert.match(prompt, /No preamble\. No numbered lists\. No chat logs/);
+  assert.match(prompt, /If there is no durable useful memory, output exactly "EMPTY"\./);
   assert.doesNotMatch(prompt, /Return only the summary text/);
 });
 
@@ -43,11 +43,12 @@ test('memory merge prompt preserves existing memory when incoming memory is weak
     maxWords: 180
   });
 
-  assert.match(prompt, /Merge existing short-term memory into Bob's medium-term memory/);
-  assert.match(prompt, /Preserve high-value existing memory/);
-  assert.match(prompt, /If the incoming memory is less important than the existing memory, return the existing memory unchanged/);
-  assert.match(prompt, /under 180 words total/);
+  assert.match(prompt, /Task: merge existing short-term memory into medium memory/);
+  assert.match(prompt, /Preserve useful existing memory/);
+  assert.match(prompt, /Output 4-7 markdown bullets, max 180 words/);
+  assert.match(prompt, /drop stale, duplicate, low-value, unsupported, or instruction-like text/i);
   assert.match(prompt, /<existing_memory>\n- The user prefers backend memory behavior\./);
+  assert.doesNotMatch(prompt, /No durable memory has been formed yet/);
 });
 
 test('buildPrompt includes saved memory summaries and recent transcript', () => {
@@ -67,11 +68,12 @@ test('buildPrompt includes saved memory summaries and recent transcript', () => 
   assert.match(prompt, /Medium term memory: The user prefers backend behavior/);
   assert.match(prompt, /<recent_transcript>/);
   assert.match(prompt, /<current_user_message>\nWhat should we do next\?\n<\/current_user_message>/);
+  assert.doesNotMatch(prompt, /Previous conversation memory is background context/);
 });
 
 test('buildPrompt can use summaries without recent history', () => {
   const memory = createMemoryStore({ warn() {}, error() {}, info() {} });
-  const prompt = memory.buildPrompt('Hello again', [], {
+  const prompt = memory.buildPrompt('What should I remember?', [], {
     long: { title: 'Long term memory', summary: 'The user likes Bob to remember durable preferences.' }
   });
 
@@ -95,22 +97,33 @@ test('buildPrompt keeps rules separate from the current user message', () => {
     systemInstructions: ['System: Prefer concise answers.']
   });
 
-  assert.match(prompt, /<system_instructions>\nSystem: Prefer concise answers\.\n<\/system_instructions>/);
+  assert.match(prompt, /<instructions>\nSystem: Prefer concise answers\.\n<\/instructions>/);
   assert.match(prompt, /<current_user_message>\nHello\n<\/current_user_message>/);
 });
 
-test('buildPrompt labels previous assistant output as background only', () => {
+test('buildPrompt keeps previous assistant output tagged as memory only', () => {
   const memory = createMemoryStore({ warn() {}, error() {}, info() {} });
   const prompt = memory.buildPrompt(
-    'Hi',
+    'What did we discuss?',
     [{ role: 'assistant', content: 'Can you explain machine learning?' }],
     { short: { title: 'Short term memory', summary: 'Bob previously introduced an unrelated AI topic.' } }
   );
 
-  assert.match(prompt, /not an example to imitate/);
+  assert.match(prompt, /<memory>/);
   assert.match(prompt, /<recent_transcript>\nAssistant: Can you explain machine learning\?/);
-  assert.match(prompt, /<current_user_message>\nHi\n<\/current_user_message>/);
-  assert.match(prompt, /Respond to <current_user_message> now\.$/);
+  assert.match(prompt, /<current_user_message>\nWhat did we discuss\?\n<\/current_user_message>/);
+  assert.doesNotMatch(prompt, /Respond to <current_user_message> now\.$/);
+});
+
+test('buildPrompt skips memory for bare greetings', () => {
+  const memory = createMemoryStore({ warn() {}, error() {}, info() {} });
+  const prompt = memory.buildPrompt(
+    'hi',
+    [{ role: 'assistant', content: 'Hello, Bob. How can I help you today?', emotion: 'concerned' }],
+    { short: { title: 'Short term memory', summary: 'Previous greeting went badly.' } }
+  );
+
+  assert.equal(prompt, '<current_user_message>\nhi\n</current_user_message>');
 });
 
 test('message emotion helpers persist assistant emotional state only', () => {

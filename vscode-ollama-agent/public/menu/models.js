@@ -1,10 +1,16 @@
 ﻿// Extracted from menu.js. Loaded after public/menu.js.
+let pullJobsPollTimer = null;
+let currentPullJobs = [];
+const completedPullJobIds = new Set();
+
 function initModels() {
   byId('installBtn')?.addEventListener('click', installModel);
   byId('saveOllamaConfig')?.addEventListener('click', saveOllamaConfig);
   fetchOllamaConfig();
   fetchModels();
   fetchAvailableModels();
+  fetchPullJobs();
+  startPullJobsPolling();
 }
 
 async function fetchOllamaConfig() {
@@ -129,17 +135,9 @@ async function installModel() {
   if (modelStatus) modelStatus.textContent = 'Installing ' + model + '...';
 
   try {
-    const r = await fetch('/api/ollama/pull', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model })
-    });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    if (modelStatus) modelStatus.textContent = 'Installed ' + model;
+    const job = await startModelDownload(model);
+    if (modelStatus) modelStatus.textContent = `${job.reused ? 'Already downloading' : 'Started download'} ${model}`;
     modelInput.value = '';
-    fetchModels();
-    window.__chat?.loadModels?.();
   } catch (err) {
     if (modelStatus) modelStatus.textContent = 'Install error: ' + err.message;
   }
@@ -207,26 +205,134 @@ function renderAvailableModels(items) {
       await downloadModel(fullModel);
     });
   });
+  availableList.querySelectorAll('.tag-select').forEach(select => {
+    select.addEventListener('change', updateDownloadButtonStates);
+  });
+  updateDownloadButtonStates();
 }
 
 async function downloadModel(model) {
   const modelStatus = byId('modelStatus');
-  if (modelStatus) modelStatus.textContent = `Downloading ${model}...`;
+  if (modelStatus) modelStatus.textContent = `Starting download ${model}...`;
 
   try {
-    const r = await fetch('/api/ollama/pull', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model })
-    });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || JSON.stringify(j));
-    if (modelStatus) modelStatus.textContent = `Downloaded ${model}`;
-    fetchModels();
-    fetchAvailableModels();
-    window.__chat?.loadModels?.();
+    const job = await startModelDownload(model);
+    if (modelStatus) modelStatus.textContent = `${job.reused ? 'Already downloading' : 'Started download'} ${model}`;
   } catch (err) {
     if (modelStatus) modelStatus.textContent = `Download error: ${err.message}`;
   }
+}
+
+async function startModelDownload(model) {
+  const r = await fetch('/api/ollama/pull', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model })
+  });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || JSON.stringify(j));
+  await fetchPullJobs();
+  startPullJobsPolling();
+  return { ...(j.data || {}), reused: Boolean(j.reused) };
+}
+
+function startPullJobsPolling() {
+  if (pullJobsPollTimer) return;
+  pullJobsPollTimer = setInterval(fetchPullJobs, 2000);
+}
+
+function stopPullJobsPollingIfIdle() {
+  if (currentPullJobs.some(job => job.status === 'running')) return;
+  if (!pullJobsPollTimer) return;
+  clearInterval(pullJobsPollTimer);
+  pullJobsPollTimer = null;
+}
+
+async function fetchPullJobs() {
+  const pullJobsList = byId('pullJobsList');
+  if (!pullJobsList) return;
+
+  try {
+    const resp = await fetch('/api/ollama/pulls', { cache: 'no-store' });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error || 'Could not load downloads');
+    currentPullJobs = json.data || [];
+    renderPullJobs(currentPullJobs);
+    updateDownloadButtonStates();
+    refreshInstalledModelsForCompletedJobs(currentPullJobs);
+    stopPullJobsPollingIfIdle();
+  } catch (err) {
+    pullJobsList.textContent = 'Download status error: ' + err.message;
+  }
+}
+
+function refreshInstalledModelsForCompletedJobs(jobs) {
+  const newlyComplete = jobs.filter(job => job.status === 'succeeded' && !completedPullJobIds.has(job.id));
+  jobs.filter(job => job.status === 'succeeded').forEach(job => completedPullJobIds.add(job.id));
+  if (newlyComplete.length === 0) return;
+  fetchModels();
+  fetchAvailableModels();
+  window.__chat?.loadModels?.();
+}
+
+function renderPullJobs(jobs) {
+  const pullJobsList = byId('pullJobsList');
+  if (!pullJobsList) return;
+
+  if (!jobs || jobs.length === 0) {
+    pullJobsList.innerHTML = '<div class="empty">No downloads yet</div>';
+    return;
+  }
+
+  pullJobsList.innerHTML = '';
+  jobs.slice(0, 12).forEach(job => {
+    const row = document.createElement('div');
+    row.className = `pull-job ${escapeHtml(job.status || 'running')}`;
+    row.innerHTML = `
+      <div class="pull-job-main">
+        <div class="pull-job-title">${escapeHtml(job.model || 'unknown model')}</div>
+        <div class="pull-job-detail">${escapeHtml(formatPullJobDetail(job))}</div>
+      </div>
+      <div class="pull-job-state">${escapeHtml(formatPullJobState(job))}</div>
+    `;
+    pullJobsList.appendChild(row);
+  });
+}
+
+function formatPullJobState(job) {
+  if (job.status === 'succeeded') return 'Done';
+  if (job.status === 'failed') return 'Failed';
+  return 'Running';
+}
+
+function formatPullJobDetail(job) {
+  if (job.error) return job.error;
+  const progress = formatPullProgress(job);
+  return [job.statusText || '', progress].filter(Boolean).join(' - ') || 'Waiting for status';
+}
+
+function formatPullProgress(job) {
+  const completed = Number(job.completed);
+  const total = Number(job.total);
+  if (!Number.isFinite(completed) || !Number.isFinite(total) || total <= 0) return '';
+  const pct = Math.max(0, Math.min(100, Math.round((completed / total) * 100)));
+  return `${pct}%`;
+}
+
+function selectedDownloadModel(btn) {
+  const modelName = btn?.dataset?.model || '';
+  const tagSelect = btn?.parentElement?.querySelector?.('.tag-select');
+  const tag = tagSelect?.value || 'latest';
+  return tag !== 'latest' ? `${modelName}:${tag}` : modelName;
+}
+
+function updateDownloadButtonStates() {
+  const runningModels = new Set(currentPullJobs.filter(job => job.status === 'running').map(job => job.model));
+  document.querySelectorAll('.btn-download').forEach(btn => {
+    const model = selectedDownloadModel(btn);
+    const running = runningModels.has(model);
+    btn.disabled = running;
+    btn.textContent = running ? 'Downloading' : 'Download';
+  });
 }
 

@@ -77,11 +77,35 @@ if ($envValues['DUCKDNS_TOKEN'] -and $envValues['DUCKDNS_DOMAINS']) {
   $profileArgs = @('--profile', 'duckdns')
 }
 
-& (Join-Path $PSScriptRoot 'run-docker.ps1') compose `
-  --project-name $projectName `
-  --env-file $envFile `
-  @profileArgs `
-  -f (Join-Path $repoRoot 'docker-compose.yml') `
-  @ComposeArgs
+$composeBaseArgs = @(
+  'compose',
+  '--project-name', $projectName,
+  '--env-file', $envFile
+)
+$composeBaseArgs += $profileArgs
+$composeBaseArgs += @('-f', (Join-Path $repoRoot 'docker-compose.yml'))
 
-exit $LASTEXITCODE
+$isUpCommand = $ComposeArgs.Count -gt 0 -and $ComposeArgs[0] -eq 'up'
+
+if ($Environment -eq 'prod' -and $isUpCommand) {
+  Write-Host "[deploy] Stopping caddy before app recreate to avoid proxying a missing backend"
+  & (Join-Path $PSScriptRoot 'run-docker.ps1') @composeBaseArgs stop caddy
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "[deploy] caddy was not stopped cleanly or does not exist yet; continuing" -ForegroundColor Yellow
+  }
+}
+
+& (Join-Path $PSScriptRoot 'run-docker.ps1') @composeBaseArgs @ComposeArgs
+$composeExitCode = $LASTEXITCODE
+
+if ($composeExitCode -ne 0) {
+  exit $composeExitCode
+}
+
+if ($Environment -eq 'prod' -and $isUpCommand) {
+  Write-Host "[deploy] Ensuring caddy is running after app is healthy"
+  & (Join-Path $PSScriptRoot 'run-docker.ps1') @composeBaseArgs up -d caddy
+  exit $LASTEXITCODE
+}
+
+exit $composeExitCode

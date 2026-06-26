@@ -5,27 +5,54 @@ const {
   createMemorySkillService,
   isContextPressureHigh,
   normalizeMemoryBudget,
+  sanitizeMemorySummary,
   transcriptFromMessages
 } = require('../server/memorySkill');
 
-test('transcriptFromMessages creates role-labeled memory transcripts', () => {
+test('transcriptFromMessages creates chatHistory memory JSON', () => {
   assert.equal(
     transcriptFromMessages([
-      { role: 'user', content: 'I prefer concise notes.' },
-      { role: 'assistant', content: 'Understood.' },
+      { role: 'user', content: 'I prefer concise notes.', created_at: '2026-06-25T18:30:00.000Z', metadata: { detectedUserEmotion: 'curious', detectedUserEmotionIntensity: 0.64 } },
+      { role: 'assistant', content: 'Understood.', createdAt: new Date('2026-06-25T18:31:00.000Z'), emotion: 'friendly', metadata: { emotionIntensity: 1.4 } },
       { role: 'system', content: 'System event.' }
     ]),
-    'User: I prefer concise notes.\n\nBob: Understood.\n\nSystem: System event.'
+    JSON.stringify({
+      chatHistory: [
+        { role: 'user', dateTime: '2026-06-25T18:30:00.000Z', content: 'I prefer concise notes.', detectedUserEmotion: 'curious', detectedUserEmotionIntensity: 0.64 },
+        { role: 'assistant', dateTime: '2026-06-25T18:31:00.000Z', content: 'Understood.', assistantEmotion: 'friendly', assistantEmotionIntensity: 1 },
+        { role: 'system', dateTime: null, content: 'System event.' }
+      ]
+    }, null, 2)
   );
 });
 
 test('buildFactoidExtractionPrompt forbids unsupported sensitive inference', () => {
   const prompt = buildFactoidExtractionPrompt('User: My name is Rob.');
 
-  assert.match(prompt, /Only include facts explicitly supported by the transcript/);
+  assert.match(prompt, /Only include facts explicitly supported by the chat history/);
   assert.match(prompt, /Do not infer sensitive attributes, secrets, medical facts, financial account data, or credentials/);
   assert.match(prompt, /"factoids"/);
-  assert.match(prompt, /User: My name is Rob\./);
+  assert.match(prompt, /<chat_memory>\nUser: My name is Rob\./);
+});
+
+test('sanitizeMemorySummary rejects preambles recaps and hallucinated canned facts', () => {
+  assert.equal(
+    sanitizeMemorySummary('Based on the given prompt and instructions, here are the prioritized markdown bullets:\n1. Recurring preferences - Bob has a preference for coffee over tea.'),
+    ''
+  );
+  assert.equal(
+    sanitizeMemorySummary('- Stable user preferences: The user\'s preference for a particular type of music or food is unlikely to change frequently.\n- Enduring projects: The user may have ongoing projects.'),
+    ''
+  );
+  assert.equal(
+    sanitizeMemorySummary('- User: Hello\n- Bob: Hi there'),
+    ''
+  );
+  assert.equal(sanitizeMemorySummary('EMPTY'), '');
+  assert.equal(
+    sanitizeMemorySummary('- The user prefers backend memory behavior.\n- Bob should mention requirements.'),
+    '- The user prefers backend memory behavior.\n- Bob should mention requirements.'
+  );
 });
 
 test('memory skill refreshSummary uses scope limits and saves generated summaries', async () => {
@@ -47,7 +74,7 @@ test('memory skill refreshSummary uses scope limits and saves generated summarie
     userKeyForRequest: () => 'user-1',
     generateText: async (model, prompt, options) => {
       calls.push(['generateText', { model, prompt, options }]);
-      return '- The user prefers backend behavior.';
+      return 'Based on your requirements, here are bullets:\n1. User: I prefer backend behavior.';
     }
   });
 
@@ -56,8 +83,12 @@ test('memory skill refreshSummary uses scope limits and saves generated summarie
   assert.equal(calls[0][1].limit, 24);
   assert.equal(calls[0][1].conversationId, 'main');
   assert.equal(calls[1][1].model, 'llama3');
-  assert.match(calls[1][1].prompt, /Create a short-term memory list/);
-  assert.equal(summary.summary, '- The user prefers backend behavior.');
+  assert.match(calls[1][1].prompt, /Task: write short memory only/);
+  assert.equal(calls[2][1].debug.skill, 'memory-short-summary');
+  assert.match(calls[2][1].debug.input, /Task: write short memory only/);
+  assert.match(calls[2][1].debug.output, /Based on your requirements/);
+  assert.equal(calls[2][1].debug.sanitizedOutput, '');
+  assert.equal(summary.summary, '');
   assert.equal(summary.sourceMessageCount, 1);
 });
 
@@ -85,6 +116,9 @@ test('memory skill cascade merges long, medium, then short memory', async () => 
     },
     saveSummary: async payload => {
       savedScopes.push(payload.scope);
+      assert.equal(Boolean(payload.debug?.input), true);
+      assert.equal(Boolean(payload.debug?.output), true);
+      assert.equal(Boolean(payload.debug?.skill), true);
       return payload;
     }
   };
@@ -102,10 +136,11 @@ test('memory skill cascade merges long, medium, then short memory', async () => 
   await service.runCascadeUpdate({ req: {}, model: 'llama3', conversationId: 'main' });
 
   assert.deepEqual(savedScopes, ['long', 'medium', 'short']);
-  assert.match(generatedPrompts[0], /Merge existing medium-term memory into Bob's long-term memory/);
-  assert.match(generatedPrompts[1], /Merge existing short-term memory into Bob's medium-term memory/);
-  assert.match(generatedPrompts[2], /Merge chat messages since the last memory update into Bob's short-term memory/);
+  assert.match(generatedPrompts[0], /Task: merge existing medium-term memory into long memory/);
+  assert.match(generatedPrompts[1], /Task: merge existing short-term memory into medium memory/);
+  assert.match(generatedPrompts[2], /Task: merge chat messages since the last memory update into short memory/);
   assert.match(generatedPrompts[2], /Short memory should only use new chat/);
+  assert.match(generatedPrompts[2], /"chatHistory": \[/);
 });
 
 test('memory skill factoid refresh persists only transcript-supported facts', async () => {
@@ -179,6 +214,78 @@ test('memory skill suppresses duplicate summary jobs per user conversation and s
   assert.equal(generateCalls, 1);
   releaseGenerate.forEach(release => release());
   await new Promise(resolve => setImmediate(resolve));
+});
+
+test('memory skill interval update only runs due summary scopes', async () => {
+  const savedScopes = [];
+  const memory = {
+    summaryScopes: {
+      short: { limit: 24 },
+      medium: { limit: 100 },
+      long: { limit: 500 }
+    },
+    getSummaries: async () => ({
+      short: { summary: '- Existing short', sourceMessageCount: 0 },
+      medium: { summary: '- Existing medium', sourceMessageCount: 9 },
+      long: { summary: '- Existing long', sourceMessageCount: 9 }
+    }),
+    getMessageCount: async () => 10,
+    getUnprocessedMessages: async () => [{ role: 'user', content: 'New short-memory-only message.' }],
+    getMessages: async () => [{ role: 'user', content: 'New short-memory-only message.' }],
+    saveSummary: async payload => {
+      savedScopes.push(payload.scope);
+      return payload;
+    }
+  };
+  const service = createMemorySkillService({
+    memory,
+    logger: {},
+    intervals: { short: 1, medium: 99, long: 99 },
+    budget: { modelContextTokens: 8192, promptReserveTokens: 1200, triggerRatio: 0.9 },
+    userKeyForRequest: () => 'user-1',
+    generateText: async () => '- Updated short memory.'
+  });
+
+  await service.updateSummariesAfterTurn({ req: {}, model: 'llama3', conversationId: 'main' });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(savedScopes, ['short']);
+});
+
+test('memory skill does not run long merge from interval alone', async () => {
+  let saveCalls = 0;
+  const memory = {
+    summaryScopes: {
+      short: { limit: 24 },
+      medium: { limit: 100 },
+      long: { limit: 500 }
+    },
+    getSummaries: async () => ({
+      short: { summary: '- Existing short', sourceMessageCount: 10 },
+      medium: { summary: '- Existing medium', sourceMessageCount: 10 },
+      long: { summary: '- Existing long', sourceMessageCount: 0 }
+    }),
+    getMessageCount: async () => 10,
+    getUnprocessedMessages: async () => [{ role: 'user', content: 'Small update.' }],
+    getMessages: async () => [{ role: 'user', content: 'Small update.' }],
+    saveSummary: async payload => {
+      saveCalls += 1;
+      return payload;
+    }
+  };
+  const service = createMemorySkillService({
+    memory,
+    logger: {},
+    intervals: { short: 99, medium: 99, long: 1 },
+    budget: { modelContextTokens: 8192, promptReserveTokens: 1200, triggerRatio: 0.9 },
+    userKeyForRequest: () => 'user-1',
+    generateText: async () => '- Should not run.'
+  });
+
+  await service.updateSummariesAfterTurn({ req: {}, model: 'llama3', conversationId: 'main' });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(saveCalls, 0);
 });
 
 test('memory skill context pressure can trigger a cascade before intervals are due', async () => {
@@ -284,6 +391,44 @@ test('memory skill reports active update jobs for the current user conversation'
   releaseGenerate();
   await job;
   assert.equal(service.isUpdating({ req, conversationId: 'main' }), false);
+});
+
+test('memory skill does not run background factoid sweep after every turn unless enabled', async () => {
+  let factoidReads = 0;
+  const memory = {
+    summaryScopes: {},
+    getSummaries: async () => ({}),
+    getMessageCount: async () => 0,
+    getUnprocessedMessages: async () => [],
+    getMessages: async () => {
+      factoidReads += 1;
+      return [{ role: 'user', content: 'My name is Rob.' }];
+    },
+    saveFactoids: async payload => payload.factoids
+  };
+
+  const quietService = createMemorySkillService({
+    memory,
+    logger: {},
+    userKeyForRequest: () => 'user-1',
+    generateText: async () => '{"factoids":[]}'
+  });
+
+  quietService.updateAfterTurn({ req: {}, model: 'llama3', conversationId: 'main' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(factoidReads, 0);
+
+  const enabledService = createMemorySkillService({
+    memory,
+    logger: {},
+    backgroundFactoids: true,
+    userKeyForRequest: () => 'user-1',
+    generateText: async () => '{"factoids":[]}'
+  });
+
+  enabledService.updateAfterTurn({ req: {}, model: 'llama3', conversationId: 'main' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(factoidReads, 1);
 });
 
 test('memory budget normalizes model context and horizon word caps', () => {

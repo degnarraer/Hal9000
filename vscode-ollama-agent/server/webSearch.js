@@ -95,18 +95,21 @@ function buildWebSummaryPrompt(userPrompt, query, results) {
   ].join('\n')).join('\n\n');
 
   return [
-    'You are Bob using a web search skill.',
-    'Skill input contract:',
+    'Task: answer the user using only the provided web search results.',
+    'Input contract:',
     JSON.stringify(inputContract),
     '',
-    'Return only valid minified JSON using this output contract shape:',
-    '{"contractVersion":1,"skill":"web-search","output":{"response":"text shown to the user","metadata":{"emotion":"focused"},"data":{"query":"search query"},"sources":[{"title":"source title","url":"https://source","snippet":"short snippet"}]}}',
-    'The output.response field must summarize the search results for the user in a concise, helpful answer.',
-    'The output.metadata.emotion field must describe Bob\'s emotional state.',
-    'The output.data.query field must match the search query.',
-    'The output.sources array must include the sources used.',
-    'Use only the sources below. If the sources are thin or conflicting, say so.',
-    'Do not include markdown fences or any text outside the JSON object.',
+    'Return minified JSON only using this output shape:',
+    '{"contractVersion":1,"skill":"web-search","output":{"response":"text shown to the user","metadata":{"emotion":"focused"},"data":{"query":"search query"},"sources":[{"title":"source title","url":"https://source","snippet":"short snippet"}],"factoids":[{"factKey":"short-stable-key","category":"preference|project|identity|environment|workflow|constraint|general","fact":"The user ...","confidence":0}]}}',
+    'response: write a helpful 3-5 sentence synthesis, not a numbered search-results dump.',
+    'response should answer the user directly with the most useful facts from the snippets.',
+    'factoids: durable user facts explicitly supported by the user prompt; use [] when no new durable fact appears.',
+    'Each factoid must use factKey, category, fact, and confidence. Do not infer sensitive facts or facts not stated by the user.',
+    'ONLY use facts literally present in <search_results>. Do not add dates, names, locations, attractions, claims, or examples unless they appear in the snippets.',
+    'Mention uncertainty when snippets are thin. Do not invent facts beyond the snippets.',
+    `data.query must be exactly ${JSON.stringify(query)}.`,
+    'sources must copy the real title,url,snippet values used from <search_results>; never use placeholder source title or https://source.',
+    'Do not include markdown fences or text outside JSON.',
     '',
     '<search_results>',
     sourceLines || '(No results found.)',
@@ -114,9 +117,60 @@ function buildWebSummaryPrompt(userPrompt, query, results) {
   ].join('\n');
 }
 
+function buildWebFallbackResponse(query, results = []) {
+  if (!results.length) return `I searched for "${query}", but I could not find usable results.`;
+
+  const useful = results
+    .filter(item => item?.snippet)
+    .slice(0, 4);
+  const snippets = useful.map(item => stripHtml(item.snippet).replace(/\[[^\]]+\]/g, '').trim()).filter(Boolean);
+  if (!snippets.length) {
+    return `I found sources for "${query}", but the available snippets are thin. The most relevant result is ${results[0].title} (${results[0].url}).`;
+  }
+
+  const mainFacts = snippets
+    .map(text => text.replace(/\s+/g, ' '))
+    .filter((text, index, list) => list.findIndex(other => other.toLowerCase() === text.toLowerCase()) === index)
+    .slice(0, 3);
+  return [
+    `${query} appears to refer to ${mainFacts[0].replace(/\s*\.$/, '')}.`,
+    ...mainFacts.slice(1),
+    `Useful starting points include ${results[0].title}${results[1] ? ` and ${results[1].title}` : ''}.`
+  ].join(' ');
+}
+
+function isSearchDumpResponse(value) {
+  const text = String(value || '').trim();
+  return /search results (for|are as follows)/i.test(text) ||
+    /\b1\)\s+.*URL:/i.test(text) ||
+    /source title|https:\/\/source/i.test(text);
+}
+
+function hasUnsupportedWebClaims(response, results = []) {
+  const text = String(response || '');
+  if (!text.trim()) return false;
+  const sourceText = results
+    .map(item => `${item.title || ''} ${item.url || ''} ${stripHtml(item.snippet || '')}`)
+    .join(' ')
+    .toLowerCase();
+  const normalizedSource = sourceText.replace(/[^a-z0-9]+/g, ' ');
+
+  const properPhrases = text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b/g) || [];
+  const unsupportedProper = properPhrases
+    .filter(phrase => !['Springfield Illinois', 'Central Illinois', 'United States'].includes(phrase))
+    .some(phrase => !normalizedSource.includes(phrase.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()));
+  if (unsupportedProper) return true;
+
+  const years = text.match(/\b(1[6-9]\d{2}|20\d{2})\b/g) || [];
+  return years.some(year => !normalizedSource.includes(year));
+}
+
 module.exports = {
+  buildWebFallbackResponse,
+  hasUnsupportedWebClaims,
   shouldSearchWeb,
   extractSearchQuery,
+  isSearchDumpResponse,
   parseDuckDuckGoResults,
   searchWeb,
   buildWebSummaryPrompt

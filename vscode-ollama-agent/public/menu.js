@@ -175,7 +175,9 @@ const routes = {
   models: { title: 'Models', url: '/menu-pages/models.html', init: initModels, admin: true },
   monitor: { title: 'Monitor', url: '/menu-pages/monitor.html', init: initMonitor, admin: true },
   logging: { title: 'Logging', url: '/menu-pages/logging.html', init: initLogging, admin: true },
+  tests: { title: 'Tests', url: '/menu-pages/tests.html', init: initAdminMenu, admin: true },
   appTester: { title: "Bob's Face", url: '/menu-pages/app-tester.html', init: initAppTester, admin: true },
+  bobChatTester: { title: 'Bob Chat Tester', url: '/menu-pages/bob-chat-tester.html', init: initBobChatTester, admin: true },
   activity: { title: 'Activity', url: '/menu-pages/activity.html', init: initActivity, admin: true },
   security: { title: 'Security', url: '/menu-pages/security.html', init: initSecurity, admin: true },
   remote: { title: 'Remote Control', url: '/menu-pages/remote.html', init: initRemote, admin: true },
@@ -198,12 +200,20 @@ const menuSubmenus = {
       { route: 'users', icon: 'users', title: 'Users', description: 'Review seen users and manage admin access.' },
       { route: 'models', icon: 'boxes', title: 'Models', description: 'Install, remove, and download Bob models.' },
       { route: 'monitor', icon: 'activity', title: 'Monitor', description: 'Check the current Bob server state.' },
-      { route: 'appTester', icon: 'flask-conical', title: "Bob's Face", description: 'Test Bob face rendering and the configured voice.' },
+      { route: 'tests', icon: 'flask-conical', title: 'Tests', description: 'Open Bob face, voice, and chat contract test tools.' },
       { route: 'logging', icon: 'logs', title: 'Logging', description: 'Watch recent server activity.' },
       { route: 'activity', icon: 'chart-line', title: 'Activity', description: 'Track users, actions, and connection rates.' },
       { route: 'security', icon: 'shield-alert', title: 'Security', description: 'Review auth failures and admin access denials.' },
       { external: 'vaultwarden', icon: 'vault', title: 'Vaultwarden', description: 'Open the secrets vault and admin panel.' },
       { route: 'remote', icon: 'power', title: 'Remote Control', description: 'Restart the local server process.' }
+    ]
+  },
+  tests: {
+    title: 'Tests',
+    admin: true,
+    items: [
+      { route: 'appTester', icon: 'flask-conical', title: "Bob's Face", description: 'Test Bob face rendering and the configured voice.' },
+      { route: 'bobChatTester', icon: 'file-json-2', title: 'Bob Chat Tester', description: 'Test Bob chat responses against the JSON contract.' }
     ]
   }
 };
@@ -392,7 +402,13 @@ function slideToSubmenu(submenuName) {
   menuContent.querySelectorAll('[data-menu-route]').forEach(button => {
     button.classList.toggle('active', button.dataset.menuRoute === currentRoute);
     button.addEventListener('click', () => {
-      loadMainPage(button.dataset.menuRoute, { refreshMenu: false });
+      const routeName = button.dataset.menuRoute;
+      if (menuSubmenus[routeName]) {
+        loadMainPage(routeName, { refreshMenu: false });
+        slideToSubmenu(routeName);
+        return;
+      }
+      loadMainPage(routeName, { refreshMenu: false });
       menuContent.querySelectorAll('[data-menu-route]').forEach(item => {
         item.classList.toggle('active', item === button);
       });
@@ -440,6 +456,7 @@ async function loadMainPage(routeName, options = {}) {
 
   if (routeName === 'chat') {
     currentRoute = 'chat';
+    document.body.classList.remove('bob-chat-tester-route');
     mainPage.hidden = true;
     mainPage.innerHTML = '';
     chatContainer.hidden = false;
@@ -452,6 +469,7 @@ async function loadMainPage(routeName, options = {}) {
   if (!route) return;
   if (route.admin && !currentUser.isAdmin) {
     currentRoute = 'chat';
+    document.body.classList.remove('bob-chat-tester-route');
     mainPage.hidden = true;
     mainPage.innerHTML = '';
     chatContainer.hidden = false;
@@ -461,6 +479,7 @@ async function loadMainPage(routeName, options = {}) {
   }
 
   currentRoute = routeName;
+  document.body.classList.toggle('bob-chat-tester-route', routeName === 'bobChatTester');
   chatContainer.hidden = true;
   mainPage.hidden = false;
   setLowerBannerRoute(routeName);

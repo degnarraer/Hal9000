@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="Bob">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Bob</title>
-  <link rel="manifest" href="/manifest.webmanifest?v=bob-face-20260621">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/bob-face.svg" type="image/svg+xml">
   <link rel="icon" href="/icons/bob-face-192.png" type="image/png" sizes="192x192">
   <link rel="apple-touch-icon" href="/icons/bob-face-180.png">
@@ -56,6 +56,9 @@
                 Bob
               </span>
               <div class="ai-card-controls">
+                <button id="bobMemoryBrain" class="bob-brain-btn" type="button" aria-label="Open Bob memory" title="Bob memory">
+                  <i data-lucide="brain"></i>
+                </button>
                 <div class="model-picker" hidden>
                   <label for="model">Model</label>
                   <select id="model" aria-label="Select chat model">
@@ -141,6 +144,7 @@
   <script src="/menu/models.js"></script>
   <script src="/menu/monitor.js"></script>
   <script src="/menu/app-tester.js"></script>
+  <script src="/menu/bob-chat-tester.js"></script>
   <script src="/menu/dashboards.js"></script>
   <script src="/menu/logging-remote.js"></script>
   <script src="/menu.js"></script>

@@ -1,0 +1,93 @@
+{
+  "version": "1.0",
+  "skills": {
+    "bob-chat": {
+      "title": "Bob Chat Skill",
+      "inputTemplate": {
+        "input": {
+          "text": "[CHAT INPUT]",
+          "language": "english"
+        },
+        "user": {
+          "name": "[USER NAME]",
+          "factoids": "[FACTOIDS 5]"
+        },
+        "memory": {
+          "recentMessages": "[CHAT MEMORY 10]"
+        }
+      },
+      "outputTemplate": {
+        "response": "text shown to the user",
+        "metadata": {
+          "emotion": "idle"
+        },
+        "factoids": [
+          {
+            "factKey": "short-stable-key",
+            "category": "preference|project|identity|environment|workflow|constraint|general",
+            "fact": "The user ...",
+            "confidence": 0
+          }
+        ]
+      },
+      "instructions": [
+        "Answer the current user message only.",
+        "Return only minified JSON matching the outputTemplate.",
+        "metadata.emotion must be one allowed Bob emotion.",
+        "factoids must include only durable user facts explicitly supported by the current user message.",
+        "Use an empty factoids array when no new durable user fact appears.",
+        "No markdown fences. No text outside JSON."
+      ]
+    },
+    "web-search": {
+      "title": "Web Search Skill",
+      "inputTemplate": {
+        "input": {
+          "text": "[CHAT INPUT]",
+          "language": "english"
+        },
+        "search": {
+          "query": "[SEARCH QUERY]",
+          "results": "[SEARCH RESULTS 5]"
+        }
+      },
+      "outputTemplate": {
+        "contractVersion": 1,
+        "skill": "web-search",
+        "output": {
+          "response": "text shown to the user",
+          "metadata": {
+            "emotion": "focused"
+          },
+          "data": {
+            "query": "search query"
+          },
+          "sources": [
+            {
+              "title": "source title",
+              "url": "https://source",
+              "snippet": "short snippet"
+            }
+          ],
+          "factoids": [
+            {
+              "factKey": "short-stable-key",
+              "category": "preference|project|identity|environment|workflow|constraint|general",
+              "fact": "The user ...",
+              "confidence": 0
+            }
+          ]
+        }
+      },
+      "instructions": [
+        "Answer the user using only the provided search.results.",
+        "Return only minified JSON matching the outputTemplate.",
+        "Do not invent facts beyond the provided search results.",
+        "sources must copy the real title, url, and snippet values used.",
+        "factoids must include only durable user facts explicitly supported by the user prompt.",
+        "Use an empty factoids array when no new durable user fact appears.",
+        "No markdown fences. No text outside JSON."
+      ]
+    }
+  }
+}

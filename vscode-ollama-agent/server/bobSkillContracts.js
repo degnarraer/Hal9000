@@ -48,7 +48,15 @@ function bobEmotionApiDescription() {
 
 const BOB_CHAT_RESPONSE_CONTRACT = {
   response: 'text shown to the user',
-  metadata: { emotion: 'idle' }
+  metadata: { emotion: 'idle' },
+  factoids: [
+    {
+      factKey: 'short-stable-key',
+      category: 'preference|project|identity|environment|workflow|constraint|general',
+      fact: 'The user ...',
+      confidence: 0
+    }
+  ]
 };
 
 function normalizeBobEmotion(value) {
@@ -119,22 +127,57 @@ function parseBobChatContract(rawOutput) {
   const parsed = parseJsonObject(raw);
 
   if (!parsed) {
+    const recoveredResponse = recoverBobChatResponse(raw);
     return {
-      response: raw,
-      metadata: { emotion: 'concerned', contractValid: false }
+      response: recoveredResponse || raw,
+      metadata: { emotion: recoveredResponse ? 'idle' : 'concerned', contractValid: false },
+      factoids: []
     };
   }
 
-  const response = String(parsed.response || parsed.output?.response || '').trim();
-  const metadata = parsed.metadata || parsed.output?.metadata || {};
+  const rawResponse = String(parsed.response || parsed.output?.response || '').trim();
+  const recoveredResponse = recoverBobChatResponse(rawResponse);
+  const response = recoveredResponse || rawResponse;
+  const recoveredMalformed = Boolean(recoveredResponse) && recoveredResponse !== rawResponse;
+  const rawMetadata = parsed.metadata || parsed.output?.metadata;
+  const metadataIsObject = Boolean(rawMetadata && typeof rawMetadata === 'object' && !Array.isArray(rawMetadata));
+  const metadata = metadataIsObject ? rawMetadata : {};
+  const factoids = Array.isArray(parsed.factoids)
+    ? parsed.factoids
+    : Array.isArray(parsed.output?.factoids)
+      ? parsed.output.factoids
+      : [];
+  const factoidsIsArray = Array.isArray(parsed.factoids) || Array.isArray(parsed.output?.factoids);
   return {
     response: response || raw,
     metadata: {
-      ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
+      ...metadata,
       emotion: normalizeBobEmotion(metadata?.emotion),
-      contractValid: Boolean(response)
-    }
+      contractValid: Boolean(response) && metadataIsObject && factoidsIsArray && !recoveredMalformed
+    },
+    factoids
   };
+}
+
+function recoverBobChatResponse(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+
+  const nested = parseJsonObject(text);
+  if (nested?.response) return recoverBobChatResponse(nested.response) || String(nested.response || '').trim();
+
+  const responseTag = text.match(/"response"\s*:\s*"([\s\S]*?)(?:<\/response>|"\s*,\s*"metadata"|"[\s}]*$)/i);
+  if (responseTag?.[1]) {
+    return responseTag[1]
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, '\n')
+      .trim();
+  }
+
+  const xmlish = text.match(/<response>([\s\S]*?)<\/response>/i);
+  if (xmlish?.[1]) return xmlish[1].trim();
+
+  return '';
 }
 
 function parseSkillOutputContract(rawOutput, fallback = {}) {
@@ -176,6 +219,7 @@ module.exports = {
   normalizeBobEmotion,
   extractJsonObjectText,
   parseJsonObject,
+  recoverBobChatResponse,
   buildSkillInputContract,
   buildSkillOutputContract,
   parseBobChatContract,

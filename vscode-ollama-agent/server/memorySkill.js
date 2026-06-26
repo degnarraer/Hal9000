@@ -19,25 +19,81 @@ const DEFAULT_MEMORY_BUDGET = {
   }
 };
 
+const EMPTY_MEMORY = '';
+const BAD_MEMORY_PATTERNS = [
+  /based on (the )?(given )?(prompt|transcript|requirements|instructions)/i,
+  /prioritized markdown bullets/i,
+  /bob should retain/i,
+  /currently storing the following information/i,
+  /incoming memory is less important/i,
+  /stable user preferences:\s*the user's preference for/i,
+  /enduring projects:\s*the user may have/i,
+  /identity\/context facts the user intentionally revealed/i,
+  /durable operating principles:\s*the user may have/i,
+  /unlikely to change frequently/i,
+  /can be used to identify them in future interactions/i,
+  /guiding principles for how they approach/i,
+  /^\s*\d+\.\s/m,
+  /\bBob has a preference for coffee over tea\b/i,
+  /\bcompany's production process\b/i,
+  /\bchoosing to pursue a degree in engineering\b/i
+];
+
 function buildFactoidExtractionPrompt(transcript) {
   return [
     'You are Bob memory factoid extraction skill.',
     'Extract durable facts about the user that would help future conversations.',
-    'Only include facts explicitly supported by the transcript. Do not infer sensitive attributes, secrets, medical facts, financial account data, or credentials.',
+    'Only include facts explicitly supported by the chat history. Do not infer sensitive attributes, secrets, medical facts, financial account data, or credentials.',
     'Prefer stable preferences, ongoing projects, names the user asked Bob to remember, working style, environment details, and durable constraints.',
     'Return only JSON with this shape: {"factoids":[{"factKey":"short-stable-key","category":"preference|project|identity|environment|workflow|constraint|general","fact":"The user ...","confidence":0.0}]}',
     'If there are no durable user facts, return {"factoids":[]}.',
     '',
-    '<conversation_transcript>',
+    '<chat_memory>',
     transcript || '(No conversation messages yet.)',
-    '</conversation_transcript>'
+    '</chat_memory>'
   ].join('\n');
 }
 
 function transcriptFromMessages(messages = []) {
-  return messages
-    .map(row => `${row.role === 'assistant' ? 'Bob' : row.role === 'system' ? 'System' : 'User'}: ${row.content}`)
-    .join('\n\n');
+  return JSON.stringify({
+    chatHistory: (messages || []).map(row => {
+      const role = row?.role === 'assistant' ? 'assistant' : row?.role === 'system' ? 'system' : 'user';
+      const base = {
+        role,
+        dateTime: normalizeMessageDateTime(row),
+        content: String(row?.content || '')
+      };
+      if (role === 'assistant') {
+        return {
+          ...base,
+          assistantEmotion: String(row?.assistantEmotion || row?.emotion || row?.metadata?.emotion || 'neutral'),
+          assistantEmotionIntensity: normalizeEmotionIntensity(row?.assistantEmotionIntensity ?? row?.metadata?.assistantEmotionIntensity ?? row?.metadata?.emotionIntensity)
+        };
+      }
+      if (role === 'user') {
+        return {
+          ...base,
+          detectedUserEmotion: String(row?.detectedUserEmotion || row?.metadata?.detectedUserEmotion || row?.metadata?.emotion || 'neutral'),
+          detectedUserEmotionIntensity: normalizeEmotionIntensity(row?.detectedUserEmotionIntensity ?? row?.metadata?.detectedUserEmotionIntensity ?? row?.metadata?.emotionIntensity)
+        };
+      }
+      return base;
+    })
+  }, null, 2);
+}
+
+function normalizeMessageDateTime(row = {}) {
+  const value = row.dateTime || row.createdAt || row.created_at || row.timestamp || null;
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
+}
+
+function normalizeEmotionIntensity(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(1, number));
 }
 
 function estimateTokens(value) {
@@ -69,14 +125,36 @@ function normalizeMemoryBudget(input = {}) {
   };
 }
 
+function sanitizeMemorySummary(text, fallback = EMPTY_MEMORY) {
+  const raw = String(text || '').trim();
+  if (!raw) return fallback || EMPTY_MEMORY;
+  if (/^EMPTY$/i.test(raw)) return EMPTY_MEMORY;
+  if (BAD_MEMORY_PATTERNS.some(pattern => pattern.test(raw))) return fallback || EMPTY_MEMORY;
+
+  const bullets = raw
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => line.replace(/^\*\s+/, '- '))
+    .filter(line => line.startsWith('- '))
+    .filter(line => !/^-\s*(User|Bob|Assistant)\s*:/i.test(line))
+    .filter(line => !/^\-\s*(hi|hello|hey)[!.]?\s*$/i.test(line))
+    .filter(line => !BAD_MEMORY_PATTERNS.some(pattern => pattern.test(line)));
+
+  if (bullets.length === 0) return fallback || EMPTY_MEMORY;
+  return bullets.join('\n');
+}
+
 function createMemorySkillService({
   memory,
   logger,
   generateText,
   intervals = DEFAULT_MEMORY_SUMMARY_INTERVALS,
   budget,
+  backgroundFactoids = false,
   getErrorText = defaultErrorText,
-  userKeyForRequest = requestDatabaseUserKey
+  userKeyForRequest = requestDatabaseUserKey,
+  onMemoryChanged = null
 }) {
   if (!memory) throw new Error('memory store is required');
   if (typeof generateText !== 'function') throw new Error('generateText function is required');
@@ -91,17 +169,27 @@ function createMemorySkillService({
 
     const messages = await memory.getMessages({ req, limit: scopeConfig.limit, conversationId });
     const transcript = transcriptFromMessages(messages);
-    const summaryText = await generateText(model, buildMemorySummaryPrompt(scope, transcript), { temperature: 0.2 });
+    const input = buildMemorySummaryPrompt(scope, transcript);
+    const summaryText = await generateText(model, input, { temperature: 0.2 }, { reason: `memory-${scope}-summary` });
+    const summary = sanitizeMemorySummary(summaryText);
     return memory.saveSummary({
       req,
       scope,
-      summary: summaryText || 'No durable memory has been formed yet.',
+      summary,
       sourceMessageCount: messages.length,
-      model
+      model,
+      debug: {
+        skill: `memory-${scope}-summary`,
+        input,
+        output: summaryText || '',
+        sanitizedOutput: summary
+      }
     });
   }
 
-  async function runCascadeUpdate({ req, model, conversationId = 'default' }) {
+  async function runCascadeUpdate({ req, model, conversationId = 'default', scopes = ['long', 'medium', 'short'] }) {
+    const selectedScopes = new Set((Array.isArray(scopes) && scopes.length ? scopes : ['long', 'medium', 'short'])
+      .filter(scope => ['long', 'medium', 'short'].includes(scope)));
     const [summaries, messageCount] = await Promise.all([
       memory.getSummaries({ req }),
       memory.getMessageCount({ req, conversationId })
@@ -114,61 +202,74 @@ function createMemorySkillService({
       : [];
     const deltaTranscript = transcriptFromMessages(newMessages);
 
-    const longSummary = await mergeSummary({
-      req,
-      model,
-      scope: 'long',
-      existingSummary: summaries.long?.summary || '',
-      incomingMemory: summaries.medium?.summary || '',
-      incomingLabel: 'existing medium-term memory',
-      sourceMessageCount: messageCount
-    });
+    const result = {};
+    if (selectedScopes.has('long')) {
+      result.long = await mergeSummary({
+        req,
+        model,
+        scope: 'long',
+        existingSummary: summaries.long?.summary || '',
+        incomingMemory: summaries.medium?.summary || '',
+        incomingLabel: 'existing medium-term memory',
+        sourceMessageCount: messageCount
+      });
+    }
 
-    const mediumSummary = await mergeSummary({
-      req,
-      model,
-      scope: 'medium',
-      existingSummary: summaries.medium?.summary || '',
-      incomingMemory: summaries.short?.summary || '',
-      incomingLabel: 'existing short-term memory',
-      sourceMessageCount: messageCount
-    });
+    if (selectedScopes.has('medium')) {
+      result.medium = await mergeSummary({
+        req,
+        model,
+        scope: 'medium',
+        existingSummary: summaries.medium?.summary || '',
+        incomingMemory: summaries.short?.summary || '',
+        incomingLabel: 'existing short-term memory',
+        sourceMessageCount: messageCount
+      });
+    }
 
-    const shortSummary = await mergeSummary({
-      req,
-      model,
-      scope: 'short',
-      existingSummary: summaries.short?.summary || '',
-      incomingMemory: deltaTranscript,
-      incomingLabel: 'chat messages since the last memory update',
-      sourceMessageCount: messageCount
-    });
+    if (selectedScopes.has('short')) {
+      result.short = await mergeSummary({
+        req,
+        model,
+        scope: 'short',
+        existingSummary: summaries.short?.summary || '',
+        incomingMemory: deltaTranscript,
+        incomingLabel: 'chat messages since the last memory update',
+        sourceMessageCount: messageCount
+      });
+    }
 
-    return {
-      long: longSummary,
-      medium: mediumSummary,
-      short: shortSummary
-    };
+    return result;
   }
 
   async function mergeSummary({ req, model, scope, existingSummary, incomingMemory, incomingLabel, sourceMessageCount }) {
-    const summaryText = await generateText(
-      model,
-      buildMemoryMergePrompt(scope, {
+    const input = buildMemoryMergePrompt(scope, {
         existingSummary,
         incomingMemory,
         incomingLabel,
         maxWords: memoryBudget.maxWords[scope]
-      }),
-      { temperature: 0.15 }
+      });
+    const summaryText = await generateText(
+      model,
+      input,
+      { temperature: 0.15 },
+      { reason: `memory-${scope}-merge` }
     );
+    const fallback = sanitizeMemorySummary(existingSummary || EMPTY_MEMORY);
+    const summary = sanitizeMemorySummary(summaryText, fallback);
 
     return memory.saveSummary({
       req,
       scope,
-      summary: summaryText || existingSummary || 'No durable memory has been formed yet.',
+      summary,
       sourceMessageCount,
-      model
+      model,
+      debug: {
+        skill: `memory-${scope}-merge`,
+        input,
+        output: summaryText || '',
+        sanitizedOutput: summary
+      }
     });
   }
 
@@ -182,11 +283,13 @@ function createMemorySkillService({
         ? await memory.getUnprocessedMessages({ req, summaries, limit: memory.summaryScopes.short?.limit || 24, conversationId })
         : await memory.getMessages({ req, limit: memory.summaryScopes.short?.limit || 24, conversationId });
 
-      const isDueByMessages = Object.keys(memory.summaryScopes).some(scope => {
+      const dueScopes = Object.keys(memory.summaryScopes).filter(scope => {
+        if (scope === 'long') return false;
         const interval = Math.max(1, Number(intervals[scope]) || 1);
         const sourceCount = Number(summaries[scope]?.sourceMessageCount || 0);
         return messageCount > 0 && messageCount - sourceCount >= interval;
       });
+      const isDueByMessages = dueScopes.length > 0;
       const isDueByContext = isContextPressureHigh(summaries, unprocessedMessages, memoryBudget);
 
       if (!isDueByMessages && !isDueByContext) return;
@@ -195,7 +298,7 @@ function createMemorySkillService({
       if (summaryJobs.has(jobKey)) return;
 
       summaryJobs.add(jobKey);
-      runCascadeUpdate({ req, model, conversationId })
+      runCascadeUpdate({ req, model, conversationId, scopes: isDueByContext ? ['long', 'medium', 'short'] : dueScopes })
         .then(() => logger?.info?.(`Memory cascade refreshed from ${messageCount} messages`))
         .catch(err => logger?.warn?.('Memory cascade refresh failed', getErrorText(err)))
         .finally(() => summaryJobs.delete(jobKey));
@@ -212,14 +315,17 @@ function createMemorySkillService({
     try {
       const messages = await memory.getMessages({ req, limit: 16, conversationId });
       const transcript = transcriptFromMessages(messages);
-      const text = await generateText(model, buildFactoidExtractionPrompt(transcript), { temperature: 0.1 });
+      const text = await generateText(model, buildFactoidExtractionPrompt(transcript), { temperature: 0.1 }, { reason: 'memory-factoids' });
       const saved = await memory.saveFactoids({
         req,
         model,
         sourceMessageId,
         factoids: filterSupportedFactoids(parseFactoidExtraction(text), messages)
       });
-      if (saved.length > 0) logger?.info?.(`Memory factoids refreshed: ${saved.length} saved`);
+      if (saved.length > 0) {
+        logger?.info?.(`Memory factoids refreshed: ${saved.length} saved`);
+        onMemoryChanged?.({ req, type: 'factoids', count: saved.length });
+      }
     } catch (err) {
       logger?.warn?.('Memory factoid refresh failed', getErrorText(err));
     } finally {
@@ -227,9 +333,9 @@ function createMemorySkillService({
     }
   }
 
-  function updateAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null }) {
+  function updateAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null, refreshFactoids = backgroundFactoids } = {}) {
     updateSummariesAfterTurn({ req, model, conversationId });
-    updateFactoidsAfterTurn({ req, model, conversationId, sourceMessageId });
+    if (refreshFactoids) updateFactoidsAfterTurn({ req, model, conversationId, sourceMessageId });
   }
 
   function isUpdating({ req, conversationId = 'default' } = {}) {
@@ -272,5 +378,6 @@ module.exports = {
   createMemorySkillService,
   isContextPressureHigh,
   normalizeMemoryBudget,
+  sanitizeMemorySummary,
   transcriptFromMessages
 };

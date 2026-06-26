@@ -9,7 +9,9 @@ const {
   buildPiperEnv,
   getPiperConfigDetails,
   getPiperRuntimeStatus,
+  getRhubarbRuntimeStatus,
   getSupportedTtsProviders,
+  parseRhubarbVisemes,
   piperArgsForOutput,
   resolveTtsProvider,
   splitTextForTts
@@ -50,10 +52,45 @@ test('getPiperRuntimeStatus reports missing and configured model state', () => {
     {
       provider: 'piper',
       bin: 'piper',
+      model: 'voice.onnx',
+      config: 'voice.onnx.json',
+      hasBin: true,
+      binExists: false,
       hasModel: true,
+      modelExists: false,
       hasConfig: true,
       configLoaded: false
     }
+  );
+});
+
+test('getRhubarbRuntimeStatus reports explicit configuration only', () => {
+  assert.deepEqual(
+    getRhubarbRuntimeStatus({}),
+    {
+      provider: 'rhubarb',
+      bin: '',
+      configured: false,
+      binExists: false
+    }
+  );
+  assert.equal(getRhubarbRuntimeStatus({ RHUBARB_BIN: 'rhubarb' }).configured, true);
+});
+
+test('parseRhubarbVisemes normalizes mouth cues', () => {
+  assert.deepEqual(
+    parseRhubarbVisemes(JSON.stringify({
+      mouthCues: [
+        { start: 0, end: 0.1, value: 'A' },
+        { start: 0.1, end: 0.2, value: 'X' },
+        { start: 0.2, end: 0.2, value: 'B' },
+        { start: 'bad', end: 0.3, value: 'C' }
+      ]
+    })),
+    [
+      { start: 0, end: 0.1, value: 'A' },
+      { start: 0.1, end: 0.2, value: 'H' }
+    ]
   );
 });
 
