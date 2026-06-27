@@ -4,6 +4,7 @@ env/*.env
 !env/*.env.example
 deploy/keycloak/generated/
 backups/
+stt-models/
 node_modules/
 dist/
 npm-debug.log

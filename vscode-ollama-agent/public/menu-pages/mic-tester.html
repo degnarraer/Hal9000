@@ -1,0 +1,102 @@
+<section class="panel-view mic-tester-view">
+  <div class="monitor-toolbar">
+    <h3>Microphone Tester</h3>
+    <button id="micTesterCopyDebug" class="bob-chat-debug-copy" type="button">
+      <i data-lucide="copy"></i>
+      Copy Debug
+    </button>
+  </div>
+
+  <div class="mic-tester-grid">
+    <div class="mic-tester-card">
+      <h4>Controls</h4>
+      <div class="mic-tester-controls">
+        <div class="mic-tester-process">App microphone path</div>
+        <label>
+          <span>App Input Device</span>
+          <select id="micTesterInputDevice">
+            <option value="">Browser default microphone</option>
+          </select>
+        </label>
+        <div class="mic-tester-actions">
+          <button id="micTesterStart" class="settings-action" type="button">
+            <i data-lucide="mic"></i>
+            Start
+          </button>
+          <button id="micTesterStop" class="settings-action" type="button" disabled>
+            <i data-lucide="square"></i>
+            Stop
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="mic-tester-card">
+      <div class="mic-tester-card-heading">
+        <h4>Input Waveform</h4>
+        <div class="mic-renderer-toggle" role="group" aria-label="Audio renderer mode">
+          <button class="mic-renderer-mode active" type="button" data-mic-renderer="scroll">Scroll</button>
+          <button class="mic-renderer-mode" type="button" data-mic-renderer="waveform">Wave</button>
+          <button class="mic-renderer-mode" type="button" data-mic-renderer="power">Power</button>
+        </div>
+      </div>
+      <div class="mic-status-row">
+        <span id="micTesterStatusLight" class="mic-status-light mic-status-light-idle" aria-label="Mic status: idle"></span>
+        <strong id="micTesterHealth">Idle</strong>
+        <span id="micTesterMainThreadLight" class="mic-status-light mic-status-light-idle" aria-label="Main thread status: idle"></span>
+        <strong id="micTesterMainThreadHealth">Thread idle</strong>
+      </div>
+      <canvas id="micTesterWaveform" width="720" height="150"></canvas>
+      <p id="micTesterStatus" class="panel-copy">Ready.</p>
+    </div>
+
+    <div class="mic-tester-card">
+      <h4>Transcript</h4>
+      <div id="micTesterTranscript" class="mic-tester-transcript">No transcript yet.</div>
+    </div>
+
+    <div class="mic-tester-card">
+      <h4>Service Status</h4>
+      <div class="mic-services-status">
+        <div><span>Capture</span><strong id="micTesterCaptureStatus">Idle</strong></div>
+        <div><span>STT</span><strong id="micTesterSttStatus">Loading...</strong></div>
+        <div><span>Provider</span><strong id="micTesterProviderStatus">Idle</strong></div>
+        <div><span>Sample rate</span><strong id="micTesterSampleRate">Unknown</strong></div>
+        <div class="mic-services-wide"><span>Details</span><strong id="micTesterDetails">Loading...</strong></div>
+      </div>
+    </div>
+
+    <div class="mic-tester-card">
+      <h4>Diagnostics</h4>
+      <div class="mic-diagnostic-grid">
+        <div><span id="micDiagWorkletLight" class="mic-status-light mic-status-light-idle"></span><strong id="micDiagWorklet">Worklet idle</strong></div>
+        <div><span id="micDiagWorkerLight" class="mic-status-light mic-status-light-idle"></span><strong id="micDiagWorker">Worker idle</strong></div>
+        <div><span id="micDiagSocketLight" class="mic-status-light mic-status-light-idle"></span><strong id="micDiagSocket">Socket idle</strong></div>
+        <div><span id="micDiagTransportLight" class="mic-status-light mic-status-light-idle"></span><strong id="micDiagTransport">Transport idle</strong></div>
+        <div><span id="micDiagRecognizerLight" class="mic-status-light mic-status-light-idle"></span><strong id="micDiagRecognizer">Recognizer idle</strong></div>
+        <div><span id="micDiagChatRenderLight" class="mic-status-light mic-status-light-idle"></span><strong id="micDiagChatRender">Chat render idle</strong></div>
+        <div><span id="micDiagStreamLight" class="mic-status-light mic-status-light-idle"></span><strong id="micDiagStream">Stream idle</strong></div>
+        <div><span id="micDiagChartLight" class="mic-status-light mic-status-light-idle"></span><strong id="micDiagChart">Chart idle</strong></div>
+        <div><span id="micDiagLogLight" class="mic-status-light mic-status-light-idle"></span><strong id="micDiagLog">Log idle</strong></div>
+      </div>
+    </div>
+
+    <div class="mic-tester-card">
+      <h4>Subsystem Toggles</h4>
+      <div class="mic-subsystem-grid">
+        <label><input id="micSubServerStt" type="checkbox" checked><span>Server STT worker/socket</span></label>
+        <label><input id="micSubAudioWorklet" type="checkbox" checked><span>AudioWorklet pump</span></label>
+        <label><input id="micSubBrowserStt" type="checkbox" checked><span>Browser STT fallback</span></label>
+        <label><input id="micSubAutoSubmit" type="checkbox" checked><span>Submit transcript to chat</span></label>
+        <label><input id="micSubWaveform" type="checkbox" checked><span>Main waveform render</span></label>
+        <label><input id="micSubWatchdog" type="checkbox" checked><span>STT watchdog rebuild</span></label>
+        <label><input id="micSubFlush" type="checkbox" checked><span>Silence flush</span></label>
+      </div>
+    </div>
+
+    <div class="mic-tester-card mic-tester-log-card">
+      <h4>Events</h4>
+      <pre id="micTesterEvents" class="monitor-output">No events yet.</pre>
+    </div>
+  </div>
+</section>

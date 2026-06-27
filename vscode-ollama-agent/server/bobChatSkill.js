@@ -17,6 +17,12 @@ function isBareGreeting(value = '') {
   return /^(hi|hello|hey|howdy|yo|sup|good morning|good afternoon|good evening)[!.\s]*$/i.test(String(value || '').trim());
 }
 
+function isDirectNameQuestion(value = '') {
+  const text = String(value || '').trim().toLowerCase().replace(/[’]/g, "'");
+  return /\b(?:what(?:'s| is)|do you know|tell me)\s+(?:my\s+)?name\b/.test(text) ||
+    /\bwho\s+am\s+i\b/.test(text);
+}
+
 function buildBobChatSkillInstructions(req, prompt = '') {
   const displayName = displayNameFromUser(req?.user || {});
   const contractJson = JSON.stringify(BOB_CHAT_RESPONSE_CONTRACT);
@@ -26,7 +32,16 @@ function buildBobChatSkillInstructions(req, prompt = '') {
     'metadata.emotion: one word state for this answer; use idle unless a stronger state is obvious.',
     'No markdown fences. No text outside JSON. Do not explain the contract.'
   ];
-  if (!displayName || !isBareGreeting(prompt)) return instructions;
+  if (!displayName) return instructions;
+
+  if (isDirectNameQuestion(prompt)) {
+    return [
+      ...instructions,
+      `Authenticated user display name: ${displayName}. Use this only to answer direct questions about the user's own name or identity; do not treat it as saved memory.`
+    ];
+  }
+
+  if (!isBareGreeting(prompt)) return instructions;
 
   return [
     ...instructions,
@@ -57,5 +72,6 @@ module.exports = {
   buildBobChatFallbackResponse,
   buildBobChatSkillInstructions,
   displayNameFromUser,
-  isBareGreeting
+  isBareGreeting,
+  isDirectNameQuestion
 };

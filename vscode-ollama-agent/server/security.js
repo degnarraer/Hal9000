@@ -323,6 +323,29 @@ function createSecurityMiddleware(logger, securityEvents = null) {
     }
   }
 
+  async function authenticateWebSocketRequest(req) {
+    if (!config.enabled) {
+      return { ok: true, user: { systemKey: 'local-dev', name: 'local-dev' } };
+    }
+
+    try {
+      const bearer = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+      if (bearer) {
+        const user = await verifyJwt(bearer, config);
+        if (!isAuthorized(user, config)) return { ok: false, status: 403, error: 'Forbidden' };
+        return { ok: true, user };
+      }
+
+      const sessionId = parseCookies(req.headers.cookie).ollama_agent_session;
+      const session = sessionId ? sessions.get(sessionId) : null;
+      if (session && session.expiresAt > Date.now()) return { ok: true, user: session.user };
+      if (sessionId) sessions.delete(sessionId);
+      return { ok: false, status: 401, error: 'Authentication required' };
+    } catch (err) {
+      return { ok: false, status: 401, error: err?.message || 'Authentication failed' };
+    }
+  }
+
   async function login(req, res) {
     markPassed(req, { systemKey: 'auth-login', name: 'auth-login' });
     if (!config.enabled) return res.redirect('/');
@@ -443,7 +466,7 @@ function createSecurityMiddleware(logger, securityEvents = null) {
     res.redirect('/auth/login');
   }
 
-  return { config, requestLogger: requestLogger(logger, config), securityHeaders: securityHeaders(config), authenticate, login, startLogin, register, callback, logout };
+  return { config, requestLogger: requestLogger(logger, config), securityHeaders: securityHeaders(config), authenticate, authenticateWebSocketRequest, login, startLogin, register, callback, logout };
 }
 
 module.exports = { createSecurityMiddleware, isHtmlPartialRequest, isPublicBrowserAsset, routeMatches };

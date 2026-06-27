@@ -184,7 +184,7 @@ test('memory skill cascade merges long, medium, then short memory', async () => 
   assert.match(generatedPrompts[2], /"chatHistory": \[/);
 });
 
-test('memory skill factoid refresh persists only transcript-supported facts', async () => {
+test('memory skill factoid refresh persists LLM-selected factoids after schema cleanup', async () => {
   let savedPayload;
   const memory = {
     summaryScopes: {},
@@ -214,7 +214,8 @@ test('memory skill factoid refresh persists only transcript-supported facts', as
   assert.equal(savedPayload.model, 'llama3');
   assert.equal(savedPayload.sourceMessageId, 42);
   assert.deepEqual(savedPayload.factoids, [
-    { factKey: 'name', category: 'identity', fact: 'The user is named Rob.', confidence: 0.8 }
+    { factKey: 'name', category: 'identity', fact: 'The user is named Rob.', confidence: 0.8 },
+    { factKey: 'office', category: 'environment', fact: 'The user works in a quiet office.', confidence: 0.8 }
   ]);
 });
 
@@ -264,7 +265,8 @@ test('memory skill extracts factoids during memory merge', async () => {
   assert.equal(savedPayload.model, 'llama3');
   assert.equal(savedPayload.sourceMessageId, 11);
   assert.deepEqual(savedPayload.factoids, [
-    { factKey: 'name', category: 'identity', fact: 'The user is named Rob.', confidence: 0.9 }
+    { factKey: 'name', category: 'identity', fact: 'The user is named Rob.', confidence: 0.9 },
+    { factKey: 'office', category: 'environment', fact: 'The user works in a quiet office.', confidence: 0.8 }
   ]);
 });
 
@@ -283,13 +285,14 @@ test('memory skill suppresses duplicate summary jobs per user conversation and s
       long: { summary: '- Existing long', sourceMessageCount: 0 }
     }),
     getMessageCount: async () => 10,
-    getMessages: async () => [{ role: 'user', content: 'Remember that I like tests.' }],
+    getMessages: async () => [{ role: 'user', content: 'x'.repeat(3600) }],
     saveSummary: async payload => payload
   };
   const service = createMemorySkillService({
     memory,
     logger: {},
     intervals: { short: 1 },
+    budget: { modelContextTokens: 2048, promptReserveTokens: 512, triggerRatio: 0.5 },
     userKeyForRequest: () => 'user-1',
     generateText: async () => {
       generateCalls += 1;
@@ -301,13 +304,16 @@ test('memory skill suppresses duplicate summary jobs per user conversation and s
 
   await service.updateSummariesAfterTurn({ req: {}, model: 'llama3', conversationId: 'main' });
   await service.updateSummariesAfterTurn({ req: {}, model: 'llama3', conversationId: 'main' });
+  while (!releaseGenerate.length) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
 
   assert.equal(generateCalls, 1);
   releaseGenerate.forEach(release => release());
   await new Promise(resolve => setImmediate(resolve));
 });
 
-test('memory skill interval update only runs due summary scopes', async () => {
+test('memory skill does not run automatic interval merges below context pressure', async () => {
   const savedScopes = [];
   const memory = {
     summaryScopes: {
@@ -340,7 +346,7 @@ test('memory skill interval update only runs due summary scopes', async () => {
   await service.updateSummariesAfterTurn({ req: {}, model: 'llama3', conversationId: 'main' });
   await new Promise(resolve => setImmediate(resolve));
 
-  assert.deepEqual(savedScopes, ['short']);
+  assert.deepEqual(savedScopes, []);
 });
 
 test('memory skill does not run long merge from interval alone', async () => {

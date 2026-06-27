@@ -358,9 +358,8 @@ function createMemoryStore(logger) {
     }
   }
 
-  async function getUnprocessedMessages({ req, summaries = null, limit = historyLimit, conversationId = 'default' }) {
+  async function getUnprocessedMessages({ req, summaries = null, limit = null, conversationId = 'default' }) {
     if (!(await ensureReady())) return [];
-    const safeLimit = Math.max(1, Math.min(Number(limit) || historyLimit, 1000));
     try {
       const result = await pool.query(
         `WITH ordered_messages AS (
@@ -370,13 +369,11 @@ function createMemoryStore(logger) {
            WHERE user_key = $1
              AND conversation_id = $2
              AND memory_merged = false
-           ORDER BY created_at DESC, id DESC
-           LIMIT $3
          )
          SELECT id, role, model, content, emotion, metadata, memory_merged, created_at, memory_sequence
          FROM ordered_messages
          ORDER BY created_at ASC, id ASC`,
-        [requestDatabaseUserKey(req), conversationId, safeLimit]
+        [requestDatabaseUserKey(req), conversationId]
       );
       return result.rows.map(hydrateMessageEmotion);
     } catch (err) {
@@ -591,9 +588,7 @@ function isBareGreeting(prompt = '') {
 
 function unprocessedMessageLimit({ summaries = {}, messageCount = 0, limit = DEFAULT_HISTORY_LIMIT } = {}) {
   const processedCount = Number(summaries.short?.sourceMessageCount || 0);
-  const unprocessedCount = Math.max(0, Number(messageCount || 0) - processedCount);
-  const safeLimit = Math.max(1, Number(limit) || DEFAULT_HISTORY_LIMIT);
-  return Math.min(unprocessedCount, safeLimit);
+  return Math.max(0, Number(messageCount || 0) - processedCount);
 }
 
 function normalizeFactKey(value) {

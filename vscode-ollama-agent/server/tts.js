@@ -3,8 +3,8 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const DEFAULT_TTS_PROVIDER = 'piper';
-const SUPPORTED_TTS_PROVIDERS = new Set(['piper']);
+const DEFAULT_TTS_PROVIDER = 'kokoro';
+const SUPPORTED_TTS_PROVIDERS = new Set(['piper', 'kokoro']);
 
 function getTtsProvider(env = process.env) {
   const provider = String(env.TTS_PROVIDER || DEFAULT_TTS_PROVIDER).trim().toLowerCase();
@@ -65,6 +65,34 @@ function piperArgsForOutput(outPath, env = process.env) {
   if (env.TTS_PIPER_NOISE_W) args.push('--noise_w', env.TTS_PIPER_NOISE_W);
 
   return args;
+}
+
+function splitCommandArgs(value = '') {
+  return String(value || '')
+    .match(/"[^"]*"|'[^']*'|\S+/g)
+    ?.map(part => part.replace(/^['"]|['"]$/g, '')) || [];
+}
+
+function kokoroArgsForOutput(outPath, env = process.env) {
+  const configured = splitCommandArgs(env.TTS_KOKORO_ARGS || '');
+  const args = configured.length ? configured : ['--output', outPath];
+  return args.map(arg => String(arg)
+    .replaceAll('{out}', outPath)
+    .replaceAll('{output}', outPath)
+    .replaceAll('{voice}', env.TTS_KOKORO_VOICE || '')
+    .replaceAll('{lang}', env.TTS_LANG || 'en'));
+}
+
+function getKokoroRuntimeStatus(env = process.env) {
+  const bin = env.TTS_KOKORO_BIN || env.KOKORO_BIN || 'kokoro';
+  return {
+    provider: 'kokoro',
+    bin,
+    args: kokoroArgsForOutput('{out}', env),
+    voice: env.TTS_KOKORO_VOICE || '',
+    hasBin: Boolean(bin),
+    binExists: Boolean(bin && fs.existsSync(bin))
+  };
 }
 
 function getPiperConfigPath(env = process.env) {
@@ -220,6 +248,31 @@ async function synthesizePiperSpeechFile(text, env = process.env) {
   return { path: outPath, contentType: 'audio/wav', provider: 'piper' };
 }
 
+function runKokoroToFile({ text, outPath, env = process.env, keepFile = false }) {
+  const bin = env.TTS_KOKORO_BIN || env.KOKORO_BIN || 'kokoro';
+  const args = kokoroArgsForOutput(outPath, env);
+  return runCommandWithText({
+    bin,
+    args,
+    text,
+    outPath,
+    timeoutMs: Number(env.TTS_TIMEOUT_MS || env.TTS_KOKORO_TIMEOUT_MS || 60000),
+    keepFile
+  });
+}
+
+async function synthesizeKokoroSpeech(text, env = process.env) {
+  const outPath = tempAudioPath('wav');
+  const audio = await runKokoroToFile({ text, outPath, env });
+  return { audio, contentType: 'audio/wav', provider: 'kokoro' };
+}
+
+async function synthesizeKokoroSpeechFile(text, env = process.env) {
+  const outPath = tempAudioPath('wav');
+  await runKokoroToFile({ text, outPath, env, keepFile: true });
+  return { path: outPath, contentType: 'audio/wav', provider: 'kokoro' };
+}
+
 function getRhubarbRuntimeStatus(env = process.env) {
   const bin = env.TTS_RHUBARB_BIN || env.RHUBARB_BIN || '';
   return {
@@ -314,13 +367,17 @@ module.exports = {
   getSupportedTtsProviders,
   getPiperConfigDetails,
   getPiperRuntimeStatus,
+  getKokoroRuntimeStatus,
   getRhubarbRuntimeStatus,
   resolveTtsProvider,
   buildPiperEnv,
   generateRhubarbVisemes,
   parseRhubarbVisemes,
   piperArgsForOutput,
+  kokoroArgsForOutput,
   splitTextForTts,
   synthesizePiperSpeech,
-  synthesizePiperSpeechFile
+  synthesizePiperSpeechFile,
+  synthesizeKokoroSpeech,
+  synthesizeKokoroSpeechFile
 };

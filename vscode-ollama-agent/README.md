@@ -118,4 +118,19 @@ TTS_PIPER_MODEL=C:\voices\en_US-lessac-medium.onnx
 TTS_PIPER_CONFIG=C:\voices\en_US-lessac-medium.onnx.json
 ```
 
+### Local speech-to-text
+
+The server can use Vosk for offline speech recognition. The `vosk` Node package is installed as a server dependency, and the acoustic model is installed separately:
+
+```bash
+npm run server:install:vosk
+```
+
+That downloads the default small English model to `./stt-models/vosk-model-small-en-us-0.15`. For local Node runs, set:
+
+```env
+VOSK_MODEL_PATH=stt-models/vosk-model-small-en-us-0.15
+MIC_TRANSCRIPTION_PROVIDER=auto
+```
+
 If Piper is not configured or fails at runtime, the TTS request fails instead of falling back to browser or OS speech synthesis. The active server-side provider is exposed at `/api/tts/status`.

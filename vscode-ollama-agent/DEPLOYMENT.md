@@ -60,6 +60,7 @@ npm run server:install
 ```
 
 This includes Git, Node.js, Docker Desktop, and the Bitwarden CLI used by the Vaultwarden secret sync helpers.
+It also installs local runtime assets used by Bob, including the Piper voice files and the default small English Vosk speech-to-text model under `./stt-models`.
 
 For a fuller first-time Windows server setup that also attempts WSL installation and persists discovered PATH entries, run from an elevated terminal:
 
@@ -68,6 +69,14 @@ npm run server:install:full
 ```
 
 If WSL is installed or Windows features are changed, reboot before starting Docker.
+
+To install only the Vosk speech-to-text model:
+
+```bash
+npm run server:install:vosk
+```
+
+Docker deploy commands also check the configured Vosk model mount before starting the app. If the model is missing, the deploy script installs it into `VOSK_MODEL_DIR` so `/stt-models/vosk-model-small-en-us-0.15` exists inside the app container.
 
 To also persist discovered tool paths to your Windows PATH:
 

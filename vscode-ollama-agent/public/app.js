@@ -2,15 +2,10 @@ const messagesEl = document.getElementById('messages');
 const input = document.getElementById('input');
 const send = document.getElementById('send');
 const clearChat = document.getElementById('clearChat');
-const modelSelect = document.getElementById('model');
-const refreshModels = document.getElementById('refreshModels');
-const defaultModel = 'AUTO';
-const selectedModelKey = 'selectedModel';
-const selectedModelVersionKey = 'selectedModelVersion';
-const selectedModelVersion = '2';
 const visibleChatClearedAtKey = 'visibleChatClearedAt';
 const bobMutedKey = 'bobVoiceMuted';
 let currentAudio;
+let currentAudioSource;
 let unlockedSpeechAudio;
 let playbackRate = Number(localStorage.getItem('playbackRate') || '1');
 let bobVoiceMuted = localStorage.getItem(bobMutedKey) === 'true';
@@ -18,6 +13,7 @@ let aiAudioCtx;
 let aiAnalyser;
 let aiDataArray;
 let aiAnimationId;
+let aiMediaSources = new WeakMap();
 let audioUnlocked = false;
 let streamingSpeechActive = false;
 let streamingSpeechBuffer = '';
@@ -27,9 +23,10 @@ let streamingSpeechGeneration = 0;
 let ttsUnavailableReason = '';
 const ANALYZED_TTS_FOR_CHAT = true;
 let chatUserIsAdmin = false;
-let memoryInteractionTimer;
-let memoryInteractionLastSent = 0;
+let showChatDebugPills = true;
 let bobMemoryEventSource;
+let ollamaPresenceTimer;
+const APP_DIAGNOSTIC_WARN_MS = 60;
 
 const aiWaveform = document.getElementById('aiWaveform');
 const bobContextCanvas = document.getElementById('bobContextChart');
@@ -46,6 +43,26 @@ let bobContextChartPromise;
 let bobContextRefreshTimer;
 let bobContextDebounce;
 let speechPlaybackGeneration = 0;
+
+function emitAppDiagnostic(area, detail = {}) {
+  window.dispatchEvent(new CustomEvent('bob:app-diagnostic', {
+    detail: { area, ...detail }
+  }));
+}
+
+function measureAppWork(area, work) {
+  const startedAt = performance.now();
+  const result = work();
+  const durationMs = performance.now() - startedAt;
+  if (durationMs > APP_DIAGNOSTIC_WARN_MS) {
+    emitAppDiagnostic(area, {
+      pressure: true,
+      durationMs: Number(durationMs.toFixed(1)),
+      thresholdMs: APP_DIAGNOSTIC_WARN_MS
+    });
+  }
+  return result;
+}
 
 function showDialog({ title = 'Bob', message = '', confirmText = 'OK', cancelText = '', danger = false } = {}) {
   return new Promise(resolve => {
@@ -277,7 +294,7 @@ function attachBobMemoryDialogEvents(overlay, close) {
       const response = await fetch('/api/memory/merge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: modelSelect?.value || undefined, reason: 'brain-dialog' })
+        body: JSON.stringify({ reason: 'brain-dialog' })
       });
       const json = await response.json();
       if (!json.ok) throw new Error(json.error || 'Could not merge memory');
@@ -498,6 +515,10 @@ async function copyTextToClipboard(text) {
 }
 
 function setMessageSkills(el, metadata = {}) {
+  if (!showChatDebugPills) {
+    el?.querySelector('.skill-rail')?.remove();
+    return;
+  }
   const skills = normalizeSkills(metadata);
   if (!el || skills.length === 0) return;
   el.dataset.skills = skills.join(',');
@@ -551,6 +572,11 @@ function setMessageCitations(el, data = {}) {
 }
 
 function setMessageOllamaDebug(el, metadata = {}) {
+  if (!showChatDebugPills) {
+    el?.querySelector('.ollama-debug-rail')?.remove();
+    el?.querySelector('.skill-rail')?.remove();
+    return;
+  }
   if (!el || !chatUserIsAdmin) return;
   const skillDebug = Array.isArray(metadata.skillDebug) ? metadata.skillDebug : [];
   const entries = skillDebug.length
@@ -656,21 +682,49 @@ function showOllamaDebug(label, value) {
   });
 }
 
+function appendTextWithLinks(container, text) {
+  const tokenPattern = /\[([^\]\n]{1,180})\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>"']+/g;
+  let cursor = 0;
+  String(text || '').replace(tokenPattern, (match, title, markdownUrl, offset) => {
+    const isMarkdownLink = Boolean(markdownUrl);
+    const trailing = isMarkdownLink ? '' : match.match(/[),.;:!?]+$/)?.[0] || '';
+    const url = isMarkdownLink ? markdownUrl : trailing ? match.slice(0, -trailing.length) : match;
+    const label = isMarkdownLink ? String(title || '').trim() || url : url;
+    if (offset > cursor) container.appendChild(document.createTextNode(String(text).slice(cursor, offset)));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    anchor.textContent = label;
+    container.appendChild(anchor);
+    if (trailing) container.appendChild(document.createTextNode(trailing));
+    cursor = offset + match.length;
+    return match;
+  });
+  if (cursor < String(text || '').length) {
+    container.appendChild(document.createTextNode(String(text || '').slice(cursor)));
+  }
+}
+
 function setMessageText(el, text) {
   if (!el) return;
-  let body = el.querySelector('.msg-body');
-  if (!body) {
-    body = document.createElement('span');
-    body.className = 'msg-body';
-    el.appendChild(body);
-  }
-  body.textContent = text;
-  if (el.classList.contains('bot')) el.dataset.speakText = text || '';
+  measureAppWork('chat-render', () => {
+    let body = el.querySelector('.msg-body');
+    if (!body) {
+      body = document.createElement('span');
+      body.className = 'msg-body';
+      el.appendChild(body);
+    }
+    body.replaceChildren();
+    appendTextWithLinks(body, text);
+    if (el.classList.contains('bot')) el.dataset.speakText = text || '';
+  });
 }
 
 function addMessage(role, text, metadata = {}) {
   const div = document.createElement('div');
   div.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
+  div._bobMetadata = metadata || {};
   setMessageText(div, text);
   if (role !== 'user') {
     div.tabIndex = 0;
@@ -699,6 +753,41 @@ async function loadChatAdminState() {
   document.body.classList.toggle('chat-admin', chatUserIsAdmin);
 }
 
+async function loadChatDebugSettings() {
+  if (!chatUserIsAdmin) {
+    showChatDebugPills = false;
+    document.body.classList.toggle('chat-debug-pills-hidden', true);
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/admin/debug-settings', { cache: 'no-store' });
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Debug settings unavailable');
+    showChatDebugPills = json.data?.showChatDebugPills !== false;
+  } catch (err) {
+    console.warn('Failed to load debug settings', err);
+    showChatDebugPills = true;
+  }
+
+  applyChatDebugPillVisibility();
+}
+
+function applyChatDebugPillVisibility(value = showChatDebugPills) {
+  showChatDebugPills = value !== false;
+  document.body.classList.toggle('chat-debug-pills-hidden', !showChatDebugPills);
+  messagesEl?.querySelectorAll('.msg.bot').forEach(message => {
+    const metadata = message._bobMetadata || {};
+    if (!showChatDebugPills) {
+      message.querySelector('.skill-rail')?.remove();
+      message.querySelector('.ollama-debug-rail')?.remove();
+      return;
+    }
+    setMessageSkills(message, metadata);
+    setMessageOllamaDebug(message, metadata);
+  });
+}
+
 async function loadMemoryHistory() {
   try {
     const response = await fetch('/api/memory/history?limit=24', { cache: 'no-store' });
@@ -725,20 +814,22 @@ async function clearVisibleChat() {
     danger: true
   });
   if (!shouldClear) return;
+
+  localStorage.setItem(visibleChatClearedAtKey, new Date().toISOString());
+  messagesEl.innerHTML = '';
+
   try {
     setBobMemoryMerging(true);
     await fetch('/api/memory/merge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: modelSelect?.value || undefined, reason: 'clear-chat' })
+      body: JSON.stringify({ reason: 'clear-chat' })
     });
   } catch (err) {
     console.warn('Memory merge before clear failed', err);
   } finally {
     setBobMemoryMerging(false);
   }
-  localStorage.setItem(visibleChatClearedAtKey, new Date().toISOString());
-  messagesEl.innerHTML = '';
 }
 
 function shouldIgnoreBubbleReplay(target) {
@@ -753,102 +844,6 @@ function replayBobBubble(bubble) {
 async function sendMessage() {
   const prompt = input.value.trim();
   return sendPrompt(prompt);
-}
-
-function getSelectedModel() {
-  return modelSelect?.value || '';
-}
-
-function sendMemoryInteraction(reason = 'interaction', immediate = false) {
-  const now = Date.now();
-  if (!immediate && now - memoryInteractionLastSent < 10000) return;
-  memoryInteractionLastSent = now;
-  const payload = JSON.stringify({
-    reason,
-    model: getSelectedModel() || undefined
-  });
-
-  if (immediate && navigator.sendBeacon) {
-    navigator.sendBeacon('/api/memory/interaction', new Blob([payload], { type: 'application/json' }));
-    return;
-  }
-
-  fetch('/api/memory/interaction', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: payload,
-    keepalive: true
-  }).catch(() => {});
-}
-
-function scheduleMemoryInteraction(reason = 'interaction') {
-  clearTimeout(memoryInteractionTimer);
-  memoryInteractionTimer = setTimeout(() => sendMemoryInteraction(reason), 300);
-}
-
-function normalizeModelName(item) {
-  if (typeof item === 'string') return item;
-  return item?.name || item?.model || '';
-}
-
-async function loadChatModels() {
-  if (!modelSelect) return;
-
-  const hasCurrentModelSelection = localStorage.getItem(selectedModelVersionKey) === selectedModelVersion;
-  const previousValue = hasCurrentModelSelection
-    ? localStorage.getItem(selectedModelKey) || modelSelect.value || defaultModel
-    : defaultModel;
-  modelSelect.disabled = true;
-
-  try {
-    const resp = await fetch('/api/ollama/models', { cache: 'no-store' });
-    const json = await resp.json();
-    if (!json.ok) throw new Error(json.error || 'Could not load models');
-
-    const models = (json.data || [])
-      .map(normalizeModelName)
-      .filter(Boolean);
-
-    modelSelect.innerHTML = '';
-
-    if (models.length === 0) {
-      const option = document.createElement('option');
-      option.value = '';
-      option.textContent = 'No models installed';
-      modelSelect.appendChild(option);
-      modelSelect.value = '';
-      send.disabled = true;
-      return;
-    }
-
-    const autoOption = document.createElement('option');
-    autoOption.value = 'AUTO';
-    autoOption.textContent = 'AUTO (router chooses)';
-    modelSelect.appendChild(autoOption);
-
-    models.forEach(name => {
-      const option = document.createElement('option');
-      option.value = name;
-      option.textContent = name;
-      modelSelect.appendChild(option);
-    });
-
-    modelSelect.value = previousValue === 'AUTO' || models.includes(previousValue) ? previousValue : 'AUTO';
-    localStorage.setItem(selectedModelKey, modelSelect.value);
-    localStorage.setItem(selectedModelVersionKey, selectedModelVersion);
-    send.disabled = false;
-  } catch (err) {
-    console.warn('Failed to load chat models', err);
-    if (!modelSelect.options.length) {
-      const option = document.createElement('option');
-      option.value = '';
-      option.textContent = 'Models unavailable';
-      modelSelect.appendChild(option);
-    }
-    send.disabled = true;
-  } finally {
-    modelSelect.disabled = false;
-  }
 }
 
 function loadBobContextChartJs() {
@@ -872,18 +867,10 @@ function scheduleBobContextRefresh(delay = 250) {
 
 async function refreshBobContextUsage({ silent = false } = {}) {
   if (!bobContextCanvas || !bobContextStatus) return;
-  const model = getSelectedModel();
-  if (!model) {
-    updateBobContextStatus({ message: 'No model', state: 'idle' });
-    return;
-  }
   if (!silent) updateBobContextStatus({ message: 'Checking', state: 'idle' });
 
   try {
-    const params = new URLSearchParams({
-      model,
-      prompt: input?.value || ''
-    });
+    const params = new URLSearchParams({ prompt: input?.value || '' });
     const response = await fetch(`/api/memory/context?${params.toString()}`, { cache: 'no-store' });
     const json = await response.json();
     if (!json.ok) throw new Error(json.error || 'Context unavailable');
@@ -897,14 +884,14 @@ async function refreshBobContextUsage({ silent = false } = {}) {
 async function renderBobContextChart(data) {
   if (!bobContextCanvas || !bobContextStatus) return;
   const Chart = await loadBobContextChartJs();
-  const actual = Number(data.actualInputTokens);
+  const actual = data.actualInputTokens === null || data.actualInputTokens === undefined || data.actualInputTokens === '' ? NaN : Number(data.actualInputTokens);
   const estimate = Math.max(0, Number(data.estimatedInputTokens ?? data.inputTokens ?? 0));
   const hasActual = Number.isFinite(actual) && actual >= 0;
   const used = hasActual ? actual : estimate;
   const max = Math.max(1, Number(data.modelContextTokens || 1));
-  const remaining = Math.max(0, max - used);
   const trigger = Math.max(0, Number(data.triggerTokens || 0));
   const percent = Math.min(100, Math.round((used / max) * 100));
+  const freePercent = Math.max(0, 100 - percent);
   const updating = Boolean(data.updating);
   const due = Boolean(data.updateDue);
   const barColor = updating
@@ -915,10 +902,8 @@ async function renderBobContextChart(data) {
 
   updateBobContextStatus({
     message: updating
-      ? 'Updating memory'
-      : due
-        ? `Memory due ${percent}%`
-        : `${Math.round(used)}/${max} ${hasActual ? 'actual' : 'est'}`,
+      ? 'Updating'
+      : `${percent}%`,
     state: updating ? 'updating' : due ? 'due' : 'idle'
   });
 
@@ -929,7 +914,7 @@ async function renderBobContextChart(data) {
       datasets: [
         {
           label: 'Used',
-          data: [used],
+          data: [percent],
           backgroundColor: barColor,
           borderColor: barColor,
           borderWidth: 1,
@@ -940,7 +925,7 @@ async function renderBobContextChart(data) {
         },
         {
           label: 'Free',
-          data: [remaining],
+          data: [freePercent],
           backgroundColor: 'rgba(255,255,255,0.055)',
           borderColor: 'rgba(255,255,255,0.08)',
           borderWidth: 1,
@@ -952,7 +937,6 @@ async function renderBobContextChart(data) {
       ]
     },
     options: {
-      indexAxis: 'y',
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
@@ -960,8 +944,9 @@ async function renderBobContextChart(data) {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: context => `${context.dataset.label}: ${Math.round(context.raw)} tokens`,
+            label: context => `${context.dataset.label}: ${Math.round(context.raw)}%`,
             afterBody: () => [
+              `${Math.round(used)}/${Math.round(max)} tokens`,
               `Estimate: ${Math.round(estimate)} tokens`,
               hasActual ? `Actual updated: ${data.actualUpdatedAt || 'latest turn'}` : 'Actual: waiting for Bob turn',
               `Trigger: ${trigger} tokens`,
@@ -974,13 +959,13 @@ async function renderBobContextChart(data) {
       scales: {
         x: {
           stacked: true,
-          min: 0,
-          max,
           display: false,
           grid: { display: false }
         },
         y: {
           stacked: true,
+          min: 0,
+          max: 100,
           display: false,
           grid: { display: false },
           border: { display: false }
@@ -1063,6 +1048,21 @@ function startBobContextMonitor() {
   bobContextRefreshTimer = null;
 }
 
+function sendOllamaPresence() {
+  return fetch('/api/ollama/presence', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ visible: document.visibilityState !== 'hidden' }),
+    keepalive: true
+  }).catch(err => console.warn('Ollama presence heartbeat failed', err));
+}
+
+function startOllamaPresenceHeartbeat() {
+  if (ollamaPresenceTimer) clearInterval(ollamaPresenceTimer);
+  sendOllamaPresence();
+  ollamaPresenceTimer = setInterval(sendOllamaPresence, 15000);
+}
+
 function unlockAudio() {
   try {
     aiAudioCtx = aiAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
@@ -1071,6 +1071,10 @@ function unlockAudio() {
   } catch (err) {
     console.warn('Audio unlock failed', err);
   }
+}
+
+function isVoiceInputRunning() {
+  return Boolean(window.__mic?.isMicRunning?.() || document.getElementById('micToggle')?.dataset.running === '1');
 }
 
 function unlockMediaPlayback() {
@@ -1148,6 +1152,14 @@ function stopSpeechPlayback() {
     currentAudio.load?.();
     currentAudio = null;
   }
+  if (currentAudioSource) {
+    try {
+      currentAudioSource.onended = null;
+      currentAudioSource.stop(0);
+      currentAudioSource.disconnect();
+    } catch (err) {}
+    currentAudioSource = null;
+  }
   if (aiAnimationId) {
     cancelAnimationFrame(aiAnimationId);
     aiAnimationId = null;
@@ -1198,6 +1210,7 @@ async function fetchTtsManifest(text) {
 async function speakText(text) {
   const clean = text.trim();
   if (!clean) return;
+  if (isVoiceInputRunning()) return;
 
   try {
     stopSpeechPlayback();
@@ -1220,6 +1233,7 @@ async function speakText(text) {
 async function speakQueuedText(text, generation) {
   const clean = text.trim();
   if (!clean || generation !== streamingSpeechGeneration) return;
+  if (isVoiceInputRunning()) return;
 
   try {
     const j = await fetchTtsManifest(clean);
@@ -1237,12 +1251,14 @@ async function speakQueuedText(text, generation) {
 }
 
 function speakWithBrowserVoice(text) {
+  if (isVoiceInputRunning()) return;
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
   window.speechSynthesis.cancel();
   speakBrowserChunk(text);
 }
 
 function speakBrowserChunk(text) {
+  if (isVoiceInputRunning()) return null;
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return null;
   const utterance = new SpeechSynthesisUtterance(text.slice(0, 4500));
   utterance.lang = 'en-US';
@@ -1265,6 +1281,7 @@ function speakBrowserChunk(text) {
 }
 
 function startStreamingSpeech() {
+  if (isVoiceInputRunning()) return false;
   if (ANALYZED_TTS_FOR_CHAT) {
     streamingSpeechGeneration += 1;
     streamingSpeechActive = true;
@@ -1354,7 +1371,8 @@ function hasBrowserSpeechQueued() {
   return Boolean(window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending));
 }
 
-function playAudioUrls(urls, index = 0, generation = speechPlaybackGeneration, spokenText = '') {
+function playAudioUrls(urls, index = 0, generation = speechPlaybackGeneration, spokenText = '', options = {}) {
+  if (!options.allowDuringVoiceInput && isVoiceInputRunning()) return Promise.resolve();
   const item = urls[index];
   if (generation !== speechPlaybackGeneration || !item) {
     return Promise.resolve();
@@ -1375,11 +1393,11 @@ function playAudioUrls(urls, index = 0, generation = speechPlaybackGeneration, s
     bobExpression?.speakText?.(mouthText, { audio: currentAudio, visemes });
     currentAudio.onended = () => {
       bobExpression?.stopVisemeSpeech?.();
-      resolve(playAudioUrls(urls, index + 1, generation, spokenText));
+      resolve(playAudioUrls(urls, index + 1, generation, spokenText, options));
     };
     currentAudio.onerror = () => {
       bobExpression?.stopVisemeSpeech?.();
-      resolve(playAudioUrls(urls, index + 1, generation, spokenText));
+      resolve(playAudioUrls(urls, index + 1, generation, spokenText, options));
     };
     currentAudio.play().catch(async err => {
       console.warn('Audio playback was blocked or failed', err);
@@ -1388,10 +1406,77 @@ function playAudioUrls(urls, index = 0, generation = speechPlaybackGeneration, s
         if (generation === speechPlaybackGeneration) await currentAudio.play();
       } catch (retryErr) {
         console.warn('Audio playback retry failed', retryErr);
-        bobExpression?.stopVisemeSpeech?.();
+        try {
+          await playAudioUrlWithWebAudio(url, mouthText, visemes, generation);
+          resolve(playAudioUrls(urls, index + 1, generation, spokenText, options));
+          return;
+        } catch (webAudioErr) {
+          console.warn('Web Audio playback fallback failed', webAudioErr);
+          bobExpression?.stopVisemeSpeech?.();
+        }
       }
       resolve();
     });
+  });
+}
+
+async function playAudioDataUrl({ audioBase64 = '', contentType = 'audio/wav', text = '', visemes = [] } = {}) {
+  const base64 = String(audioBase64 || '');
+  if (!base64) return;
+
+  unlockAudio();
+  stopSpeechPlayback();
+  const generation = speechPlaybackGeneration;
+  const url = `data:${contentType || 'audio/wav'};base64,${base64}`;
+
+  try {
+    setAiVoiceActive(true);
+    await playAudioUrls([{ url, text, visemes }], 0, generation, text, { allowDuringVoiceInput: true });
+  } finally {
+    if (generation === speechPlaybackGeneration) setAiVoiceActive(false);
+  }
+}
+
+async function playAudioUrlWithWebAudio(url, mouthText = '', visemes = [], generation = speechPlaybackGeneration) {
+  if (generation !== speechPlaybackGeneration) return;
+  aiAudioCtx = aiAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  if (aiAudioCtx.state === 'suspended') await aiAudioCtx.resume();
+
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`TTS audio fetch failed with HTTP ${response.status}`);
+  const arrayBuffer = await response.arrayBuffer();
+  const audioBuffer = await decodeAudioBuffer(arrayBuffer);
+  if (generation !== speechPlaybackGeneration) return;
+
+  const source = aiAudioCtx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.playbackRate.value = playbackRate;
+  aiAnalyser = aiAudioCtx.createAnalyser();
+  aiAnalyser.fftSize = 1024;
+  aiDataArray = new Uint8Array(aiAnalyser.fftSize);
+  source.connect(aiAnalyser);
+  aiAnalyser.connect(aiAudioCtx.destination);
+  currentAudioSource = source;
+  const durationMs = Math.max(200, (audioBuffer.duration * 1000) / Math.max(0.5, playbackRate));
+  bobExpression?.speakText?.(mouthText, { durationMs, visemes });
+  drawAiWaveform();
+
+  await new Promise(resolve => {
+    source.onended = () => {
+      if (currentAudioSource === source) currentAudioSource = null;
+      bobExpression?.stopVisemeSpeech?.();
+      resolve();
+    };
+    source.start(0);
+  });
+}
+
+function decodeAudioBuffer(arrayBuffer) {
+  return new Promise((resolve, reject) => {
+    const done = buffer => resolve(buffer);
+    const fail = err => reject(err);
+    const decoded = aiAudioCtx.decodeAudioData(arrayBuffer.slice(0), done, fail);
+    if (decoded?.then) decoded.then(resolve).catch(reject);
   });
 }
 
@@ -1400,7 +1485,13 @@ function connectAiWaveform(audio) {
     aiAudioCtx = aiAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (aiAudioCtx.state === 'suspended') aiAudioCtx.resume();
 
-    const source = aiAudioCtx.createMediaElementSource(audio);
+    let source = aiMediaSources.get(audio);
+    if (!source) {
+      source = aiAudioCtx.createMediaElementSource(audio);
+      aiMediaSources.set(audio, source);
+    } else {
+      try { source.disconnect(); } catch (err) {}
+    }
     aiAnalyser = aiAudioCtx.createAnalyser();
     aiAnalyser.fftSize = 1024;
     aiDataArray = new Uint8Array(aiAnalyser.fftSize);
@@ -1459,24 +1550,24 @@ function setAiVoiceActive(isActive) {
 
 function sendPrompt(prompt) {
   if (!prompt) return;
-  const model = getSelectedModel();
-  if (!model) {
+  if (send.disabled) {
     addMessage('bot', 'No Bob models are installed. Open Models and install one before chatting.');
     return;
   }
 
   addMessage('user', prompt);
   input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
   bobExpression?.think();
 
-  const url = `/api/stream?model=${encodeURIComponent(model)}&prompt=${encodeURIComponent(prompt)}`;
+  const url = `/api/stream?prompt=${encodeURIComponent(prompt)}`;
 
   const evt = new EventSource(url);
   const botEl = addMessage('bot', 'Thinking');
   let partial = '';
   const canSpeakStream = startStreamingSpeech();
 
-  evt.onmessage = (e) => {
+  evt.onmessage = (e) => measureAppWork('llm-stream', () => {
     const data = e.data;
     if (data === '[DONE]') { evt.close(); return; }
     const chunk = parseOllamaChunk(data);
@@ -1494,7 +1585,7 @@ function sendPrompt(prompt) {
     } catch (err) {}
     setMessageText(botEl, partial);
     queueStreamingSpeech(chunk);
-  };
+  });
   const handleSkillsEvent = (event) => {
     try {
       const parsed = JSON.parse(event.data || '{}');
@@ -1508,7 +1599,7 @@ function sendPrompt(prompt) {
       setMessageOllamaDebug(botEl, JSON.parse(event.data || '{}'));
     } catch (err) {}
   });
-  evt.addEventListener('bob-response', (event) => {
+  evt.addEventListener('bob-response', (event) => measureAppWork('llm-stream', () => {
     try {
       const parsed = JSON.parse(event.data || '{}');
       const response = String(parsed.response || '').trim();
@@ -1525,7 +1616,7 @@ function sendPrompt(prompt) {
     } catch (err) {
       console.warn('Bob response contract parse failed', err);
     }
-  });
+  }));
   evt.addEventListener('bob-emotion', (event) => {
     try {
       const parsed = JSON.parse(event.data || '{}');
@@ -1551,9 +1642,9 @@ function sendPrompt(prompt) {
     bobExpression?.setEmotion('concerned');
     if (event.data) {
       try {
-        setMessageText(botEl, JSON.parse(event.data));
+        setMessageText(botEl, formatStreamErrorMessage(JSON.parse(event.data)));
       } catch (err) {
-        setMessageText(botEl, event.data);
+        setMessageText(botEl, formatStreamErrorMessage(event.data));
       }
     } else if (!partial) {
       setMessageText(botEl, 'Bob did not return a response. Check the Monitor screen for service status.');
@@ -1562,30 +1653,28 @@ function sendPrompt(prompt) {
   });
 }
 
+function formatStreamErrorMessage(value) {
+  if (value && typeof value === 'object') {
+    return String(value.error || value.message || JSON.stringify(value)).trim() || 'Bob stream failed.';
+  }
+  return String(value || '').trim() || 'Bob stream failed.';
+}
+
 send.addEventListener('click', () => {
   unlockAudio();
-  sendMemoryInteraction('send-click', true);
   sendMessage();
 });
 document.addEventListener('pointerdown', primeAudioFromUserGesture, true);
 document.addEventListener('touchend', primeAudioFromUserGesture, true);
-document.addEventListener('pointerdown', () => scheduleMemoryInteraction('pointer'), true);
-document.addEventListener('keydown', () => scheduleMemoryInteraction('keyboard'), true);
 clearChat?.addEventListener('click', clearVisibleChat);
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     unlockAudio();
-    sendMemoryInteraction('send-enter', true);
     sendMessage();
   }
 });
 input.addEventListener('input', () => {
   scheduleBobContextRefresh(350);
-  scheduleMemoryInteraction('typing');
-});
-window.addEventListener('pagehide', () => sendMemoryInteraction('disconnect', true));
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') sendMemoryInteraction('hidden', true);
 });
 
 playbackSpeed?.addEventListener('click', (event) => {
@@ -1601,14 +1690,6 @@ bobMuteToggle?.addEventListener('keydown', event => {
   toggleBobMute();
 });
 bobMemoryBrain?.addEventListener('click', () => openBobMemoryDialog());
-
-modelSelect?.addEventListener('change', () => {
-  localStorage.setItem(selectedModelKey, modelSelect.value);
-  localStorage.setItem(selectedModelVersionKey, selectedModelVersion);
-  scheduleBobContextRefresh(50);
-});
-
-refreshModels?.addEventListener('click', loadChatModels);
 messagesEl?.addEventListener('click', (event) => {
   const copyPill = event.target.closest?.('[data-copy-debug]');
   if (copyPill) {
@@ -1647,15 +1728,28 @@ messagesEl?.addEventListener('keydown', (event) => {
   replayBobBubble(bubble);
 });
 window.addEventListener('hal:memory-changed', () => scheduleBobContextRefresh(300));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden') sendOllamaPresence();
+});
 
 setPlaybackRate(playbackRate);
 applyBobMuteState();
-loadChatModels();
-loadChatAdminState().finally(loadMemoryHistory);
+loadChatAdminState().then(loadChatDebugSettings).finally(loadMemoryHistory);
 startBobContextMonitor();
 startBobMemoryEventStream();
+startOllamaPresenceHeartbeat();
 renderIcons();
 
 window.__icons = { render: renderIcons };
-window.__chat = { sendPrompt, speakText, unlockAudio, setPlaybackRate, loadModels: loadChatModels, loadMemoryHistory };
+window.__chat = {
+  sendPrompt,
+  speakText,
+  unlockAudio,
+  setPlaybackRate,
+  playAudioDataUrl,
+  get playbackRate() { return playbackRate; },
+  loadModels: () => refreshBobContextUsage({ silent: true }),
+  loadMemoryHistory,
+  applyChatDebugPillVisibility
+};
 window.__bob = bobExpression;

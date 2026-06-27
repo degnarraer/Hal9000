@@ -7,27 +7,45 @@ const path = require('node:path');
 const {
   getTtsProvider,
   buildPiperEnv,
+  getKokoroRuntimeStatus,
   getPiperConfigDetails,
   getPiperRuntimeStatus,
   getRhubarbRuntimeStatus,
   getSupportedTtsProviders,
   parseRhubarbVisemes,
   piperArgsForOutput,
+  kokoroArgsForOutput,
   resolveTtsProvider,
   splitTextForTts
 } = require('../server/tts');
 const { sanitizeSettings } = require('../server/ttsSettings');
 
-test('getTtsProvider defaults to piper', () => {
-  assert.equal(getTtsProvider({}), 'piper');
+test('getTtsProvider defaults to kokoro', () => {
+  assert.equal(getTtsProvider({}), 'kokoro');
+  assert.equal(getTtsProvider({ TTS_PROVIDER: 'kokoro' }), 'kokoro');
   assert.equal(getTtsProvider({ TTS_PROVIDER: 'piper' }), 'piper');
-  assert.equal(getTtsProvider({ TTS_PROVIDER: 'unknown' }), 'piper');
+  assert.equal(getTtsProvider({ TTS_PROVIDER: 'unknown' }), 'kokoro');
 });
 
 test('tts provider helpers expose and resolve supported engines', () => {
-  assert.deepEqual(getSupportedTtsProviders(), ['piper']);
+  assert.deepEqual(getSupportedTtsProviders(), ['piper', 'kokoro']);
+  assert.equal(resolveTtsProvider('kokoro', 'kokoro'), 'kokoro');
   assert.equal(resolveTtsProvider('piper', 'piper'), 'piper');
   assert.equal(resolveTtsProvider('unknown', 'piper'), 'piper');
+});
+
+test('getKokoroRuntimeStatus reports command configuration', () => {
+  assert.deepEqual(
+    getKokoroRuntimeStatus({ TTS_KOKORO_BIN: 'kokoro', TTS_KOKORO_ARGS: '--output {out}', TTS_KOKORO_VOICE: 'af' }),
+    {
+      provider: 'kokoro',
+      bin: 'kokoro',
+      args: ['--output', '{out}'],
+      voice: 'af',
+      hasBin: true,
+      binExists: false
+    }
+  );
 });
 
 test('getPiperConfigDetails exposes speaker options from Piper config', () => {
@@ -190,5 +208,12 @@ test('piperArgsForOutput includes optional voice controls', () => {
       '--noise_scale', '0.55',
       '--noise_w', '0.8'
     ]
+  );
+});
+
+test('kokoroArgsForOutput supports output placeholders', () => {
+  assert.deepEqual(
+    kokoroArgsForOutput('out.wav', { TTS_KOKORO_ARGS: '--voice {voice} --output {out}', TTS_KOKORO_VOICE: 'af' }),
+    ['--voice', 'af', '--output', 'out.wav']
   );
 });

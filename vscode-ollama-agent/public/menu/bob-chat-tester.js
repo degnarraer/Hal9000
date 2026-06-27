@@ -27,7 +27,6 @@ function initBobChatTester() {
   const modelStatusState = byId('bobChatModelStatusState');
   const modelStatusSummary = byId('bobChatModelStatusSummary');
   const modelStatusList = byId('bobChatModelStatusList');
-  const selectedModelKey = 'bobChatTesterSelectedModel';
   const modelRulesKey = 'bobChatTesterModelRules';
   const supportedStageTags = [
     { value: '[CHAT INPUT]', label: '[CHAT INPUT]', title: 'Insert the current tester prompt.' },
@@ -37,8 +36,11 @@ function initBobChatTester() {
     { value: '[USER ID]', label: '[USER ID]', title: 'Insert the canonical server user id.' },
     { value: '[USER NAME]', label: '[USER NAME]', title: 'Insert the authenticated user display name.' },
     { value: '[AVAILABLE SKILLS]', label: '[AVAILABLE SKILLS]', title: 'Insert the enabled skill registry.' },
-    { value: '[FACTOIDS 5]', label: '[FACTOIDS #]', title: 'Insert saved user factoids up to the requested count.' },
-    { value: '[CHAT MEMORY 10]', label: '[CHAT MEMORY #]', title: 'Insert recent chat memory up to the requested count.' },
+    { value: '[FACTOIDS]', label: '[FACTOIDS]', title: 'Insert all saved user factoids.' },
+    { value: '[CHAT MEMORY]', label: '[CHAT MEMORY]', title: 'Insert all unmerged chat memory.' },
+    { value: '[SHORT TERM MEMORY]', label: '[SHORT TERM]', title: 'Insert the current short-term memory summary.' },
+    { value: '[MEDIUM TERM MEMORY]', label: '[MEDIUM TERM]', title: 'Insert the current medium-term memory summary.' },
+    { value: '[LONG TERM MEMORY]', label: '[LONG TERM]', title: 'Insert the current long-term memory summary.' },
     { value: '[SEARCH QUERY]', label: '[SEARCH QUERY]', title: 'Insert the server-derived search query.' },
     { value: '[SEARCH RESULTS 5]', label: '[SEARCH RESULTS #]', title: 'Insert web search results up to the requested count.' }
   ];
@@ -64,6 +66,7 @@ function initBobChatTester() {
   let testerSpeechBuffer = '';
   let testerSpeechQueue = [];
   let testerSpeechQueueActive = false;
+  let testerSpeechReceivedStream = false;
   let testerSpeechGeneration = 0;
   let testerSpeechAudio = null;
   let testerSpeechObjectUrls = [];
@@ -193,10 +196,34 @@ function initBobChatTester() {
     if (!messages) return null;
     const row = document.createElement('div');
     row.className = `bob-chat-test-message ${role}`;
-    row.textContent = text;
+    appendTextWithLinks(row, text);
     messages.appendChild(row);
     messages.scrollTop = messages.scrollHeight;
     return row;
+  }
+
+  function appendTextWithLinks(container, text) {
+    const value = String(text || '');
+    const tokenPattern = /\[([^\]\n]{1,180})\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>"']+/g;
+    let cursor = 0;
+    container.replaceChildren();
+    value.replace(tokenPattern, (match, title, markdownUrl, offset) => {
+      const isMarkdownLink = Boolean(markdownUrl);
+      const trailing = isMarkdownLink ? '' : match.match(/[),.;:!?]+$/)?.[0] || '';
+      const url = isMarkdownLink ? markdownUrl : trailing ? match.slice(0, -trailing.length) : match;
+      const label = isMarkdownLink ? String(title || '').trim() || url : url;
+      if (offset > cursor) container.appendChild(document.createTextNode(value.slice(cursor, offset)));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.textContent = label;
+      container.appendChild(anchor);
+      if (trailing) container.appendChild(document.createTextNode(trailing));
+      cursor = offset + match.length;
+      return match;
+    });
+    if (cursor < value.length) container.appendChild(document.createTextNode(value.slice(cursor)));
   }
 
   function renderPresets() {
@@ -215,13 +242,19 @@ function initBobChatTester() {
 
   async function loadModels() {
     if (!modelSelect) return;
-    const previous = localStorage.getItem(selectedModelKey) || modelSelect.value || 'AUTO';
     modelSelect.disabled = true;
     try {
-      const response = await fetchWithAuthRedirect('/api/ollama/models', { cache: 'no-store' });
+      const [response, configResponse] = await Promise.all([
+        fetchWithAuthRedirect('/api/ollama/models', { cache: 'no-store' }),
+        fetchWithAuthRedirect('/api/ollama/config', { cache: 'no-store' })
+      ]);
       const json = await response.json();
+      const configJson = await configResponse.json();
       if (!json.ok) throw new Error(json.error || 'Could not load models');
+      if (!configJson.ok) throw new Error(configJson.error || 'Could not load model config');
       const models = (json.data || []).map(normalizeModelName).filter(Boolean);
+      const configuredDefault = normalizeModelName(configJson.data?.defaultModel) || '';
+      const previous = modelSelect.value || configuredDefault;
       modelSelect.innerHTML = '';
       if (!models.length) {
         const option = document.createElement('option');
@@ -231,18 +264,13 @@ function initBobChatTester() {
         setStatus('No models', 'fail');
         return;
       }
-      const autoOption = document.createElement('option');
-      autoOption.value = 'AUTO';
-      autoOption.textContent = 'AUTO (router chooses)';
-      modelSelect.appendChild(autoOption);
       models.forEach(model => {
         const option = document.createElement('option');
         option.value = model;
-        option.textContent = model;
+        option.textContent = model === configuredDefault ? `${model} (default)` : model;
         modelSelect.appendChild(option);
       });
-      modelSelect.value = previous === 'AUTO' || models.includes(previous) ? previous : 'AUTO';
-      localStorage.setItem(selectedModelKey, modelSelect.value);
+      modelSelect.value = models.includes(previous) ? previous : models.includes(configuredDefault) ? configuredDefault : models[0];
       setStatus('Idle');
     } catch (err) {
       modelSelect.innerHTML = '<option value="">Models unavailable</option>';
@@ -330,6 +358,7 @@ function initBobChatTester() {
     testerSpeechBuffer = '';
     testerSpeechQueue = [];
     testerSpeechQueueActive = false;
+    testerSpeechReceivedStream = false;
     stopTesterSpeechMouth();
     if (testerSpeechAudio) {
       testerSpeechAudio.pause();
@@ -351,14 +380,26 @@ function initBobChatTester() {
     testerSpeechBuffer = '';
     testerSpeechQueue = [];
     testerSpeechQueueActive = false;
+    testerSpeechReceivedStream = false;
     testerBob?.think?.();
     setTesterFaceStatus('Listening for stream...');
   }
 
   function queueTesterStreamingSpeech(text) {
     if (!testerSpeechActive || !text) return;
-    testerSpeechBuffer += String(text).replace(/\s+/g, ' ');
+    testerSpeechReceivedStream = true;
+    testerSpeechBuffer += testerSpeakableText(text);
     drainTesterSpeechSentences();
+  }
+
+  function testerSpeakableText(text) {
+    return String(text || '')
+      .replace(/\n\s*Sources:\s*[\s\S]*$/i, '')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+      .replace(/https?:\/\/\S+/gi, '')
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   function drainTesterSpeechSentences() {
@@ -541,7 +582,10 @@ function initBobChatTester() {
     if (eventName === 'test-result') {
       if (!data?.ok) throw new Error(data?.error || 'Bob chat test failed');
       renderResult(data.data || {});
-      if (pending) pending.textContent = data.data?.response || 'Bob returned an empty response.';
+      if (pending) appendTextWithLinks(pending, data.data?.response || 'Bob returned an empty response.');
+      if (!testerSpeechReceivedStream && data.data?.response) {
+        queueTesterStreamingSpeech(data.data.response);
+      }
       const passed = Boolean(data.data?.validation?.valid);
       setStatus(passed ? 'Passed' : 'Failed', passed ? 'pass' : 'fail');
       if (liveStatus) {
@@ -693,9 +737,45 @@ function initBobChatTester() {
     testerContextStatus.title = title || '';
   }
 
-  async function renderTesterContextChart(metadata = {}) {
+  function normalizeTesterContext(metadata = {}) {
+    if (metadata?.ctx && typeof metadata.ctx === 'object') return metadata.ctx;
+    if (metadata && typeof metadata === 'object' && (
+      metadata.modelContextTokens || metadata.estimatedInputTokens || metadata.actualInputTokens || metadata.inputTokens
+    )) {
+      return {
+        Estimated: metadata.estimatedInputTokens ?? metadata.inputTokens,
+        Actual: metadata.actualInputTokens,
+        tokenMethod: metadata.tokenMethod,
+        modelContextTokens: metadata.modelContextTokens,
+        triggerTokens: metadata.triggerTokens
+      };
+    }
+    return null;
+  }
+
+  async function fetchTesterContextMetadata() {
+    const params = new URLSearchParams({
+      model: modelSelect?.value || '',
+      prompt: promptInput?.value || lastPrompt || ''
+    });
+    const response = await fetchWithAuthRedirect(`/api/memory/context?${params.toString()}`, { cache: 'no-store' });
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Context unavailable');
+    return json.data || {};
+  }
+
+  async function renderTesterContextChart(metadata = {}, { allowFetch = true } = {}) {
     if (!testerContextCanvas || !testerContextStatus) return;
-    const ctx = metadata?.ctx;
+    let ctx = normalizeTesterContext(metadata);
+    if (!ctx && allowFetch) {
+      try {
+        updateTesterContextStatus('CTX ...');
+        const liveMetadata = await fetchTesterContextMetadata();
+        ctx = normalizeTesterContext(liveMetadata);
+      } catch (err) {
+        console.warn('Tester context chart unavailable', err);
+      }
+    }
     if (!ctx || typeof ctx !== 'object') {
       updateTesterContextStatus('CTX -');
       if (testerContextChart) {
@@ -707,7 +787,7 @@ function initBobChatTester() {
     }
 
     const Chart = await loadTesterContextChartJs();
-    const actual = Number(ctx.Actual);
+    const actual = ctx.Actual === null || ctx.Actual === undefined || ctx.Actual === '' ? NaN : Number(ctx.Actual);
     const estimated = Math.max(0, Number(ctx.Estimated ?? 0));
     const used = Number.isFinite(actual) && actual >= 0 ? actual : estimated;
     const max = Math.max(1, Number(ctx.modelContextTokens || 1));
@@ -1251,8 +1331,11 @@ function initBobChatTester() {
     const model = modelSelect?.value || '';
     if (!prompt || !model || isRunning) return;
     lastPrompt = prompt;
-    localStorage.setItem(selectedModelKey, model);
     addMessage('user', prompt);
+    if (promptInput) {
+      promptInput.value = '';
+      promptInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
     const pending = addMessage('bot', 'Testing...');
     setRunning(true);
     setStatus('Running', 'busy');
@@ -1267,7 +1350,7 @@ function initBobChatTester() {
       });
       await readLiveTestStream(response, pending);
     } catch (err) {
-      if (pending) pending.textContent = err.message;
+      if (pending) appendTextWithLinks(pending, err.message);
       setStatus('Error', 'fail');
       stopTesterSpeech();
       testerBob?.setEmotion?.('error');
@@ -1548,7 +1631,9 @@ function initBobChatTester() {
   debugCopy?.addEventListener('click', copyDebug);
   llmCopy?.addEventListener('click', copyLlmIo);
   refreshModels?.addEventListener('click', loadModels);
-  modelSelect?.addEventListener('change', () => localStorage.setItem(selectedModelKey, modelSelect.value));
+  modelSelect?.addEventListener('change', () => {
+    renderTesterContextChart({}, { allowFetch: true });
+  });
   Object.values(ruleInputs).filter(Boolean).forEach(input => input.addEventListener('change', saveModelRules));
   if (window.__bobChatTraceOutsideHandler) {
     document.removeEventListener('pointerdown', window.__bobChatTraceOutsideHandler, true);

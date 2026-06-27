@@ -50,6 +50,8 @@
     "server:install:wsl": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -InstallWsl",
     "server:install:persist-path": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -PersistPath",
     "server:install:piper": "powershell -ExecutionPolicy Bypass -File scripts/install-piper-voice.ps1",
+    "server:install:faster-whisper": "powershell -ExecutionPolicy Bypass -File scripts/install-faster-whisper.ps1",
+    "server:install:vosk": "powershell -ExecutionPolicy Bypass -File scripts/install-vosk-model.ps1",
     "server:check": "powershell -ExecutionPolicy Bypass -File scripts/install-server.ps1 -CheckOnly"
   },
   "keywords": [
@@ -86,7 +88,9 @@
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "lucide": "^1.18.0",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "vosk": "^0.3.39",
+    "ws": "^8.21.0"
   },
   "overrides": {
     "axios": "^1.18.0"

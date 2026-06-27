@@ -31,6 +31,57 @@ function Read-EnvFile($Path) {
   return $values
 }
 
+function Resolve-RepoPath($Path) {
+  if (-not $Path) {
+    return $null
+  }
+
+  if ([System.IO.Path]::IsPathRooted($Path)) {
+    return $Path
+  }
+
+  return Join-Path $repoRoot $Path
+}
+
+function ModelNameFromContainerPath($Path) {
+  if (-not $Path) {
+    return 'vosk-model-small-en-us-0.15'
+  }
+
+  $normalized = $Path.Replace('\', '/').TrimEnd('/')
+  $lastSlash = $normalized.LastIndexOf('/')
+  if ($lastSlash -ge 0) {
+    return $normalized.Substring($lastSlash + 1)
+  }
+
+  return $normalized
+}
+
+function Ensure-VoskModelForCompose {
+  $modelDir = Resolve-RepoPath ($envValues['VOSK_MODEL_DIR'])
+  if (-not $modelDir) {
+    $modelDir = Join-Path $repoRoot 'stt-models'
+  }
+
+  $modelName = ModelNameFromContainerPath $envValues['VOSK_MODEL_PATH']
+  $targetPath = Join-Path $modelDir $modelName
+  if (Test-Path $targetPath) {
+    Write-Host "[deploy] Vosk STT model present at $targetPath"
+    return
+  }
+
+  $installer = Join-Path $PSScriptRoot 'install-vosk-model.ps1'
+  if (-not (Test-Path $installer)) {
+    throw "Missing Vosk model installer script: $installer"
+  }
+
+  Write-Host "[deploy] Installing Vosk STT model for Docker mount: $targetPath"
+  & powershell -ExecutionPolicy Bypass -File $installer -ModelName $modelName -ModelDir $modelDir
+  if ($LASTEXITCODE -ne 0) {
+    throw "Vosk model install failed."
+  }
+}
+
 if (-not (Test-Path $envFile)) {
   if (Test-Path $exampleFile) {
     throw "Missing $envFile. Copy $exampleFile to $envFile and customize it first."
@@ -86,6 +137,10 @@ $composeBaseArgs += $profileArgs
 $composeBaseArgs += @('-f', (Join-Path $repoRoot 'docker-compose.yml'))
 
 $isUpCommand = $ComposeArgs.Count -gt 0 -and $ComposeArgs[0] -eq 'up'
+
+if ($isUpCommand) {
+  Ensure-VoskModelForCompose
+}
 
 if ($Environment -eq 'prod' -and $isUpCommand) {
   Write-Host "[deploy] Stopping caddy before app recreate to avoid proxying a missing backend"

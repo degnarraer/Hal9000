@@ -178,9 +178,13 @@ const routes = {
   tests: { title: 'Tests', url: '/menu-pages/tests.html', init: initAdminMenu, admin: true },
   appTester: { title: "Bob's Face", url: '/menu-pages/app-tester.html', init: initAppTester, admin: true },
   bobChatTester: { title: 'Bob Chat Tester', url: '/menu-pages/bob-chat-tester.html', init: initBobChatTester, admin: true },
+  micTester: { title: 'Microphone Tester', url: '/menu-pages/mic-tester.html', init: initMicTester, admin: true },
+  voicePipelineTester: { title: 'Voice Pipeline Tester', url: '/menu-pages/voice-pipeline-tester.html', init: initVoicePipelineTester, admin: true },
   activity: { title: 'Activity', url: '/menu-pages/activity.html', init: initActivity, admin: true },
   security: { title: 'Security', url: '/menu-pages/security.html', init: initSecurity, admin: true },
   remote: { title: 'Remote Control', url: '/menu-pages/remote.html', init: initRemote, admin: true },
+  debugSettings: { title: 'Debug Settings', url: '/menu-pages/debug-settings.html', init: initDebugSettings, admin: true },
+  micServices: { title: 'Microphone Services', url: '/menu-pages/mic-services.html', init: initMicServices, admin: true },
   settings: { title: 'Settings', url: '/menu-pages/settings.html', init: initSettings }
 };
 
@@ -204,6 +208,8 @@ const menuSubmenus = {
       { route: 'logging', icon: 'logs', title: 'Logging', description: 'Watch recent server activity.' },
       { route: 'activity', icon: 'chart-line', title: 'Activity', description: 'Track users, actions, and connection rates.' },
       { route: 'security', icon: 'shield-alert', title: 'Security', description: 'Review auth failures and admin access denials.' },
+      { route: 'debugSettings', icon: 'bug', title: 'Debug Settings', description: 'Toggle admin-only debug helpers in the main chat.' },
+      { route: 'micServices', icon: 'mic-2', title: 'Microphone Services', description: 'Choose browser or server-side speech recognition.' },
       { external: 'vaultwarden', icon: 'vault', title: 'Vaultwarden', description: 'Open the secrets vault and admin panel.' },
       { route: 'remote', icon: 'power', title: 'Remote Control', description: 'Restart the local server process.' }
     ]
@@ -213,7 +219,9 @@ const menuSubmenus = {
     admin: true,
     items: [
       { route: 'appTester', icon: 'flask-conical', title: "Bob's Face", description: 'Test Bob face rendering and the configured voice.' },
-      { route: 'bobChatTester', icon: 'file-json-2', title: 'Bob Chat Tester', description: 'Test Bob chat responses against the JSON contract.' }
+      { route: 'bobChatTester', icon: 'file-json-2', title: 'Bob Chat Tester', description: 'Test Bob chat responses against the JSON contract.' },
+      { route: 'micTester', icon: 'mic-2', title: 'Microphone Tester', description: 'Test mic capture and STT providers without sending chat.' },
+      { route: 'voicePipelineTester', icon: 'radio-tower', title: 'Voice Pipeline Tester', description: 'Test mic, Pipecat transport, VAD, STT, Ollama, Kokoro, and audio output.' }
     ]
   }
 };
@@ -487,7 +495,9 @@ async function loadMainPage(routeName, options = {}) {
   if (shouldRefreshMenu) loadMenuLanding();
 
   try {
-    const response = await fetchWithAuthRedirect(route.url, { cache: 'no-store' });
+    const pageUrl = new URL(route.url, window.location.origin);
+    if (window.__assetVersion) pageUrl.searchParams.set('v', window.__assetVersion);
+    const response = await fetchWithAuthRedirect(`${pageUrl.pathname}${pageUrl.search}`, { cache: 'no-store' });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     mainPage.innerHTML = await response.text();
     window.__icons?.render?.(mainPage);

@@ -124,7 +124,7 @@ test('selectBobModel keeps manual selections unchanged', () => {
       requestedModel: 'qwen3.5:4b',
       installedModels: ['qwen3.5:0.8b', 'qwen3.5:4b'],
       prompt: 'Hi',
-      defaultModel: 'llama2'
+      defaultModel: 'qwen3.5:9b'
     }),
     {
       requestedModel: 'qwen3.5:4b',
@@ -143,7 +143,7 @@ test('selectBobModel chooses the smallest adequate installed Qwen model for AUTO
     installedModels,
     prompt: 'Hi',
     route: { skill: 'bob-chat' },
-    defaultModel: 'llama2',
+    defaultModel: 'qwen3.5:9b',
     minAutoSizeB: 2
   }).model, 'qwen3.5:2b');
 
@@ -152,7 +152,7 @@ test('selectBobModel chooses the smallest adequate installed Qwen model for AUTO
     installedModels,
     prompt: 'Hi',
     route: { skill: 'bob-chat' },
-    defaultModel: 'llama2'
+    defaultModel: 'qwen3.5:9b'
   }).model, 'qwen3.5:0.8b');
 
   assert.equal(selectBobModel({
@@ -160,7 +160,7 @@ test('selectBobModel chooses the smallest adequate installed Qwen model for AUTO
     installedModels,
     prompt: 'Debug this failing API call',
     route: { skill: 'bob-chat' },
-    defaultModel: 'llama2'
+    defaultModel: 'qwen3.5:9b'
   }).model, 'qwen3.5:9b');
 
   assert.equal(selectBobModel({
@@ -168,7 +168,7 @@ test('selectBobModel chooses the smallest adequate installed Qwen model for AUTO
     installedModels,
     prompt: 'Tell me about Springfield Illinois',
     route: { skill: 'web-search' },
-    defaultModel: 'llama2'
+    defaultModel: 'qwen3.5:9b'
   }).model, 'qwen3.5:9b');
 });
 
@@ -176,7 +176,7 @@ test('selectRouterModel chooses a capable small router model above the configure
   assert.deepEqual(
     selectRouterModel({
       installedModels: ['qwen3.5:0.8b', 'qwen3.5:2b', 'qwen3.5:4b', 'qwen3.5:9b'],
-      defaultModel: 'llama2',
+      defaultModel: 'qwen3.5:9b',
       minSizeB: 3
     }),
     {
@@ -194,7 +194,7 @@ test('parseBobModelRouterContract accepts only installed model choices', () => {
     installedModels: ['qwen3.5:0.8b', 'qwen3.5:4b'],
     prompt: 'Hi',
     route: { skill: 'bob-chat' },
-    defaultModel: 'llama2'
+    defaultModel: 'qwen3.5:9b'
   });
 
   assert.deepEqual(
@@ -227,7 +227,7 @@ test('parseBobModelRouterContract rejects choices below fallback target size', (
     prompt: 'Hi',
     route: { skill: 'bob-chat' },
     minAutoSizeB: 2,
-    defaultModel: 'llama2'
+    defaultModel: 'qwen3.5:9b'
   });
 
   const parsed = parseBobModelRouterContract('{"model":"qwen3.5:0.8b","reason":"simple greeting"}', fallback.candidates, fallback);

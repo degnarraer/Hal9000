@@ -1,5 +1,5 @@
 const { buildMemoryMergePrompt, buildMemorySummaryPrompt } = require('./memorySummary');
-const { filterSupportedFactoids, parseFactoidExtraction } = require('./memoryFactoids');
+const { normalizeFactoids, parseFactoidExtraction } = require('./memoryFactoids');
 const { requestDatabaseUserKey } = require('./userIdentity');
 
 const DEFAULT_MEMORY_SUMMARY_INTERVALS = {
@@ -10,7 +10,7 @@ const DEFAULT_MEMORY_SUMMARY_INTERVALS = {
 
 const DEFAULT_MEMORY_BUDGET = {
   modelContextTokens: 4096,
-  triggerRatio: 0.5,
+  triggerRatio: 0.75,
   promptReserveTokens: 1200,
   maxWords: {
     short: 120,
@@ -213,7 +213,7 @@ function createMemorySkillService({
 
     const shortLimit = memory.summaryScopes.short?.limit || 24;
     const newMessages = typeof memory.getUnprocessedMessages === 'function'
-      ? await memory.getUnprocessedMessages({ req, summaries, limit: shortLimit, conversationId })
+      ? await memory.getUnprocessedMessages({ req, summaries, conversationId })
       : await legacyUnprocessedMessages({ req, summaries, messageCount, conversationId, limit: shortLimit });
     const deltaTranscript = transcriptFromMessages(newMessages);
 
@@ -342,31 +342,20 @@ function createMemorySkillService({
 
   async function updateSummariesAfterTurn({ req, model, conversationId = 'default' }) {
     try {
-      const [summaries, messageCount] = await Promise.all([
-        memory.getSummaries({ req }),
-        memory.getMessageCount({ req, conversationId })
-      ]);
+      const summaries = await memory.getSummaries({ req });
       const unprocessedMessages = typeof memory.getUnprocessedMessages === 'function'
-        ? await memory.getUnprocessedMessages({ req, summaries, limit: memory.summaryScopes.short?.limit || 24, conversationId })
+        ? await memory.getUnprocessedMessages({ req, summaries, conversationId })
         : await memory.getMessages({ req, limit: memory.summaryScopes.short?.limit || 24, conversationId });
-
-      const dueScopes = Object.keys(memory.summaryScopes).filter(scope => {
-        if (scope === 'long') return false;
-        const interval = Math.max(1, Number(intervals[scope]) || 1);
-        const sourceCount = Number(summaries[scope]?.sourceMessageCount || 0);
-        return messageCount > 0 && messageCount - sourceCount >= interval;
-      });
-      const isDueByMessages = dueScopes.length > 0;
       const isDueByContext = isContextPressureHigh(summaries, unprocessedMessages, memoryBudget);
 
-      if (!isDueByMessages && !isDueByContext) return;
+      if (!isDueByContext) return;
 
       requestCascadeUpdate({
         req,
         model,
         conversationId,
-        scopes: isDueByContext ? ['long', 'medium', 'short'] : dueScopes,
-        reason: isDueByContext ? `context-pressure-${messageCount}-messages` : `message-interval-${messageCount}-messages`
+        scopes: ['long', 'medium', 'short'],
+        reason: 'context-pressure'
       }).catch(() => {});
     } catch (err) {
       logger?.warn?.('Memory summary scheduler failed', getErrorText(err));
@@ -387,7 +376,7 @@ function createMemorySkillService({
         req,
         model,
         sourceMessageId,
-        factoids: filterSupportedFactoids(parseFactoidExtraction(text), messages)
+        factoids: normalizeFactoids(parseFactoidExtraction(text))
       });
       if (saved.length > 0) {
         logger?.info?.(`Memory factoids refreshed during merge: ${saved.length} saved`);
@@ -404,7 +393,7 @@ function createMemorySkillService({
 
   async function updateFactoidsAfterTurn({ req, model, conversationId = 'default', sourceMessageId = null }) {
     const messages = typeof memory.getUnprocessedMessages === 'function'
-      ? await memory.getUnprocessedMessages({ req, limit: memory.summaryScopes.short?.limit || 24, conversationId })
+      ? await memory.getUnprocessedMessages({ req, conversationId })
       : await memory.getMessages({ req, limit: 16, conversationId });
     return refreshFactoidsFromMessages({ req, model, conversationId, messages, sourceMessageId });
   }

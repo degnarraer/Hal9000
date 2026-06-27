@@ -5,6 +5,7 @@ const {
   extractSearchQuery,
   parseDuckDuckGoResults,
   buildWebFallbackResponse,
+  appendSourceLinks,
   hasUnsupportedWebClaims,
   isSearchDumpResponse,
   buildWebSummaryPrompt
@@ -71,6 +72,18 @@ test('web fallback response synthesizes snippets instead of dumping sources', ()
   assert.match(response, /Visit Springfield Illinois/);
   assert.equal(isSearchDumpResponse("The search results for 'x' are as follows: 1) Official site, URL: https://example.com"), true);
   assert.equal(isSearchDumpResponse(response), false);
+});
+
+test('appendSourceLinks adds a deduplicated bullet list of titled source links', () => {
+  assert.equal(
+    appendSourceLinks('Here is the summary.', [
+      { title: 'First Source', url: 'https://example.com/one', snippet: 'One' },
+      { title: 'Duplicate Source', url: 'https://example.com/one', snippet: 'One again' },
+      { title: 'Second Source', url: 'https://example.org/two', snippet: 'Two' },
+      { title: 'Bad Source', url: '/relative/path', snippet: 'Bad' }
+    ]),
+    'Here is the summary.\n\nSources:\n- [First Source](https://example.com/one)\n- [Second Source](https://example.org/two)'
+  );
 });
 
 test('web claim check catches unsupported names and years', () => {

@@ -104,6 +104,8 @@ function buildBobRouterPrompt({ prompt, request, envelope, outputContract = ROUT
     `Return JSON only: ${JSON.stringify(outputContract || ROUTER_CONTRACT)}.`,
     guidance || [
       'Use only enabled skills from request.skills.available.',
+      'Extract factoids only from request.input.text before any selected skill runs.',
+      'Do not use web results, assistant responses, tool output, or saved memory as factoid evidence.',
       'If the user asks "tell me about" a real-world named place/entity, choose web-search.',
       'If unsure whether facts may be stale or hallucinated, choose web-search.'
     ].join('\n'),
@@ -249,7 +251,7 @@ function preferredInstalledModels(installedModels = []) {
     });
 }
 
-function selectRouterModel({ installedModels = [], defaultModel = 'llama2', minSizeB = 3 } = {}) {
+function selectRouterModel({ installedModels = [], defaultModel = '', minSizeB = 3 } = {}) {
   const installed = preferredInstalledModels(installedModels);
   const preferred = installed.filter(model => modelFamilyRank(model) <= 2);
   const chosen = preferred.find(model => parseModelSizeB(model) >= minSizeB)
@@ -316,7 +318,7 @@ function parseBobModelRouterContract(rawOutput, candidates = [], fallback = {}) 
   };
 }
 
-function selectBobModel({ requestedModel, installedModels = [], route = {}, prompt = '', defaultModel = 'llama2', minAutoSizeB = 0, modelRules = DEFAULT_MODEL_RULES } = {}) {
+function selectBobModel({ requestedModel, installedModels = [], route = {}, prompt = '', defaultModel = '', minAutoSizeB = 0, modelRules = DEFAULT_MODEL_RULES } = {}) {
   const installed = installedModels
     .map(normalizeInstalledModelName)
     .map(model => String(model || '').trim())

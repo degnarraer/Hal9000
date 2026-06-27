@@ -76,7 +76,7 @@ function renderMonitor(data) {
 
 function populateMonitorModels(modelSelect, models) {
   if (!modelSelect) return;
-  const selected = modelSelect.value || localStorage.getItem('selectedModel') || '';
+  const selected = modelSelect.value || '';
   modelSelect.innerHTML = '';
 
   models.forEach(model => {

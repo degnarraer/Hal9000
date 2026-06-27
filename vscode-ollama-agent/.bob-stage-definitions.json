@@ -11,8 +11,13 @@
           "userId": "[USER ID]"
         },
         "input": { "text": "[CHAT INPUT]", "language": "english" },
-        "user": { "name": "[USER NAME]", "factoids": [[FACTOIDS 5]] },
-        "memory": { "recentMessages": [[CHAT MEMORY 10]] },
+        "user": { "name": "[USER NAME]", "factoids": [[FACTOIDS]] },
+        "memory": {
+          "shortTerm": "[SHORT TERM MEMORY]",
+          "mediumTerm": "[MEDIUM TERM MEMORY]",
+          "longTerm": "[LONG TERM MEMORY]",
+          "recentMessages": [[CHAT MEMORY]]
+        },
         "skills": {
           "available": [[AVAILABLE SKILLS]]
         }

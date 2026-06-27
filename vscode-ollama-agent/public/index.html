@@ -56,40 +56,31 @@
                 </span>
                 Bob
               </span>
-              <div class="ai-card-controls">
-                <button id="bobMemoryBrain" class="bob-brain-btn" type="button" aria-label="Open Bob memory" title="Bob memory">
+              <div class="bob-context-widget" aria-label="Ollama context usage">
+                <canvas id="bobContextChart" width="42" height="98"></canvas>
+                <div class="bob-context-meta">
+                  <span>CTX</span>
+                  <small id="bobContextStatus">Checking</small>
+                </div>
+                <button id="bobMemoryBrain" class="bob-brain-btn compact" type="button" aria-label="Open Bob memory" title="Bob memory">
                   <i data-lucide="brain"></i>
                 </button>
-                <div class="model-picker" hidden>
-                  <label for="model">Model</label>
-                  <select id="model" aria-label="Select chat model">
-                    <option value="llama2">llama2</option>
-                  </select>
-                  <button id="refreshModels" class="btn-icon" type="button" aria-label="Refresh models" title="Refresh models">
-                    <i data-lucide="refresh-cw"></i>
-                  </button>
-                </div>
-                <div id="playbackSpeed" class="playback-speed" aria-label="Playback speed">
-                  <button type="button" data-speed-step="-1" aria-label="Slower" title="Slower">
-                    <i data-lucide="rewind"></i>
-                  </button>
-                  <span id="playbackRateLabel">1x</span>
-                  <button type="button" data-speed-step="1" aria-label="Faster" title="Faster">
-                    <i data-lucide="fast-forward"></i>
-                  </button>
-                  <button id="stopBobSpeech" type="button" class="playback-stop" aria-label="Stop Bob speech" title="Stop">
-                    <i data-lucide="square"></i>
-                  </button>
-                </div>
               </div>
             </div>
-            <canvas id="aiWaveform" width="420" height="80"></canvas>
-            <div class="bob-context-widget" aria-label="Ollama context usage">
-              <div class="bob-context-meta">
-                <span>CTX</span>
-                <small id="bobContextStatus">Checking context</small>
+            <div class="ai-waveform-stack">
+              <canvas id="aiWaveform" width="420" height="80"></canvas>
+              <div id="playbackSpeed" class="playback-speed" aria-label="Playback speed">
+                <button type="button" data-speed-step="-1" aria-label="Slower" title="Slower">
+                  <i data-lucide="rewind"></i>
+                </button>
+                <span id="playbackRateLabel">1x</span>
+                <button type="button" data-speed-step="1" aria-label="Faster" title="Faster">
+                  <i data-lucide="fast-forward"></i>
+                </button>
+                <button id="stopBobSpeech" type="button" class="playback-stop" aria-label="Stop Bob speech" title="Stop">
+                  <i data-lucide="square"></i>
+                </button>
               </div>
-              <canvas id="bobContextChart" width="420" height="54"></canvas>
             </div>
           </div>
         </div>
@@ -146,8 +137,12 @@
   <script src="/menu/monitor.js"></script>
   <script src="/menu/app-tester.js"></script>
   <script src="/menu/bob-chat-tester.js"></script>
+  <script src="/menu/mic-tester.js"></script>
+  <script src="/menu/voice-pipeline-tester.js"></script>
   <script src="/menu/dashboards.js"></script>
   <script src="/menu/logging-remote.js"></script>
+  <script src="/menu/debug-settings.js"></script>
+  <script src="/menu/mic-services.js"></script>
   <script src="/menu.js"></script>
 </body>
 </html>

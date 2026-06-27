@@ -43,6 +43,15 @@ test('buildBobChatSkillInstructions omits display name for substantive prompts',
   assert.doesNotMatch(instructions.join('\n'), /User display name/);
 });
 
+test('buildBobChatSkillInstructions includes profile name for direct identity questions', () => {
+  const instructions = buildBobChatSkillInstructions({ user: { name: 'Rob' } }, "what's my name?");
+  const text = instructions.join('\n');
+
+  assert.match(text, /Authenticated user display name: Rob\./);
+  assert.match(text, /direct questions about the user's own name or identity/);
+  assert.match(text, /do not treat it as saved memory/);
+});
+
 test('buildBobChatSkillInstructions omits missing display names', () => {
   const instructions = buildBobChatSkillInstructions({ user: {} });
 

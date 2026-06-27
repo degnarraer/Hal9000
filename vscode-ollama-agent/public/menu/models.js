@@ -2,12 +2,12 @@
 let pullJobsPollTimer = null;
 let currentPullJobs = [];
 const completedPullJobIds = new Set();
+let currentOllamaConfig = null;
 
 function initModels() {
   byId('installBtn')?.addEventListener('click', installModel);
   byId('saveOllamaConfig')?.addEventListener('click', saveOllamaConfig);
-  fetchOllamaConfig();
-  fetchModels();
+  fetchOllamaConfig().finally(fetchModels);
   fetchAvailableModels();
   fetchPullJobs();
   startPullJobsPolling();
@@ -15,6 +15,8 @@ function initModels() {
 
 async function fetchOllamaConfig() {
   const keepAlive = byId('ollamaKeepAlive');
+  const activeKeepAlive = byId('ollamaActiveKeepAlive');
+  const idleUnloadDelayMs = byId('ollamaIdleUnloadDelayMs');
   const status = byId('ollamaConfigStatus');
   if (!keepAlive) return;
   if (status) status.textContent = 'Loading Ollama config...';
@@ -23,9 +25,13 @@ async function fetchOllamaConfig() {
     const resp = await fetch('/api/ollama/config', { cache: 'no-store' });
     const json = await resp.json();
     if (!json.ok) throw new Error(json.error || JSON.stringify(json));
+    currentOllamaConfig = json.data || {};
     keepAlive.value = json.data?.keepAlive || '5m';
+    if (activeKeepAlive) activeKeepAlive.value = json.data?.activeKeepAlive || '-1';
+    if (idleUnloadDelayMs) idleUnloadDelayMs.value = String(json.data?.idleUnloadDelayMs || 30000);
     if (status) {
-      status.textContent = `Ollama ${json.data?.url || 'URL unknown'} - default chat model ${json.data?.defaultModel || 'unknown'}`;
+      const configPath = json.data?.configPath ? ` - config ${json.data.configPath}` : '';
+      status.textContent = `Ollama ${json.data?.url || 'URL unknown'} - default chat model ${json.data?.defaultModel || 'unset'}${configPath}`;
     }
   } catch (err) {
     if (status) status.textContent = 'Config error: ' + err.message;
@@ -34,18 +40,23 @@ async function fetchOllamaConfig() {
 
 async function saveOllamaConfig() {
   const keepAlive = byId('ollamaKeepAlive')?.value || '5m';
+  const activeKeepAlive = byId('ollamaActiveKeepAlive')?.value || '-1';
+  const idleUnloadDelayMs = Number(byId('ollamaIdleUnloadDelayMs')?.value || 30000);
   const status = byId('ollamaConfigStatus');
   if (status) status.textContent = 'Saving Ollama config...';
 
   try {
+    const defaultModel = currentOllamaConfig?.defaultModel || '';
     const resp = await fetch('/api/ollama/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keepAlive })
+      body: JSON.stringify({ defaultModel, keepAlive, activeKeepAlive, idleUnloadDelayMs })
     });
     const json = await resp.json();
     if (!json.ok) throw new Error(json.error || JSON.stringify(json));
-    if (status) status.textContent = `Saved. Chat requests now use keep_alive ${json.data.keepAlive}.`;
+    currentOllamaConfig = json.data || {};
+    if (status) status.textContent = `Saved. Default model ${json.data.defaultModel}; active users keep ${json.data.activeKeepAlive}; idle unload after ${Math.round(json.data.idleUnloadDelayMs / 1000)}s.`;
+    window.__chat?.loadModels?.();
   } catch (err) {
     if (status) status.textContent = 'Save error: ' + err.message;
   }
@@ -78,15 +89,30 @@ function renderModels(items) {
   modelsList.innerHTML = '';
   items.forEach(it => {
     const name = (typeof it === 'string') ? it : (it.name || it.model || JSON.stringify(it));
+    const isDefault = currentOllamaConfig?.defaultModel === name;
     const row = document.createElement('div');
     row.className = 'model-row';
     row.innerHTML = `
       <div class="model-name">${escapeHtml(name)}</div>
       <div class="model-actions">
+        <label class="model-default-toggle" title="Use ${escapeHtml(name)} as Bob's default model">
+          <input type="checkbox" data-default-model="${escapeHtml(name)}" ${isDefault ? 'checked' : ''}>
+          <span>${isDefault ? 'Default' : 'Make default'}</span>
+        </label>
         <button class="btn-remove" type="button" data-model="${escapeHtml(name)}">Remove</button>
       </div>
     `;
     modelsList.appendChild(row);
+  });
+
+  modelsList.querySelectorAll('[data-default-model]').forEach(input => {
+    input.addEventListener('change', async () => {
+      if (!input.checked) {
+        input.checked = true;
+        return;
+      }
+      await saveDefaultModel(input.dataset.defaultModel || '');
+    });
   });
 
   modelsList.querySelectorAll('.btn-remove').forEach(btn => {
@@ -209,6 +235,35 @@ function renderAvailableModels(items) {
     select.addEventListener('change', updateDownloadButtonStates);
   });
   updateDownloadButtonStates();
+}
+
+async function saveDefaultModel(model) {
+  const name = String(model || '').trim();
+  const status = byId('ollamaConfigStatus');
+  if (!name) return;
+  if (status) status.textContent = `Saving ${name} as default model...`;
+
+  try {
+    const payload = {
+      ...(currentOllamaConfig || {}),
+      defaultModel: name
+    };
+    const resp = await fetch('/api/ollama/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error || JSON.stringify(json));
+    currentOllamaConfig = json.data || {};
+    if (status) status.textContent = `Saved. Default model is ${json.data.defaultModel}.`;
+    await fetchOllamaConfig();
+    fetchModels();
+    window.__chat?.loadModels?.();
+  } catch (err) {
+    if (status) status.textContent = `Default model save error: ${err.message}`;
+    fetchModels();
+  }
 }
 
 async function downloadModel(model) {

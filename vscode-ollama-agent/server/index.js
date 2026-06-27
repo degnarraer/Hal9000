@@ -16,22 +16,26 @@ const { createActivityMonitor } = require('./activity');
 const { createSecurityEventStore } = require('./securityEvents');
 const { createYahooStore } = require('./yahoo');
 const { createUserChatStore } = require('./userChat');
-const { createOllamaConfigStore } = require('./ollamaConfig');
+const { createOllamaConfigStore, ollamaKeepAlivePayload } = require('./ollamaConfig');
+const { createDebugSettingsStore } = require('./debugSettings');
 const { buildBobChatFallbackResponse, buildBobChatSkillInstructions } = require('./bobChatSkill');
 const { buildBobEmotionPrompt, heuristicBobEmotion, parseBobEmotionContract } = require('./bobEmotionSkill');
 const { BOB_ROUTER_SKILLS, buildBobRouterPrompt, heuristicBobRoute, isAutoModel, parseBobRouterContract, parseModelSizeB, sanitizeModelRules, selectBobModel, selectRouterModel } = require('./bobRouterSkill');
-const { shouldSearchWeb, extractSearchQuery, searchWeb, buildWebFallbackResponse, buildWebSummaryPrompt, hasUnsupportedWebClaims, isSearchDumpResponse } = require('./webSearch');
+const { shouldSearchWeb, extractSearchQuery, searchWeb, buildWebFallbackResponse, appendSourceLinks, buildWebSummaryPrompt, hasUnsupportedWebClaims, isSearchDumpResponse } = require('./webSearch');
 const { BOB_CHAT_RESPONSE_CONTRACT, BOB_EMOTIONS, buildSkillInputContract, parseBobChatContract, parseJsonObject, parseSkillOutputContract } = require('./bobSkillContracts');
 const { createStreamingResponseSentenceEmitter, extractStreamingResponseText } = require('./bobStreamingText');
-const { getTtsProvider, getSupportedTtsProviders, getPiperConfigDetails, getPiperRuntimeStatus, getRhubarbRuntimeStatus, resolveTtsProvider, buildPiperEnv, splitTextForTts, synthesizePiperSpeech, synthesizePiperSpeechFile, generateRhubarbVisemes } = require('./tts');
+const { getTtsProvider, getSupportedTtsProviders, getPiperConfigDetails, getPiperRuntimeStatus, getKokoroRuntimeStatus, getRhubarbRuntimeStatus, resolveTtsProvider, buildPiperEnv, splitTextForTts, synthesizePiperSpeech, synthesizePiperSpeechFile, synthesizeKokoroSpeech, synthesizeKokoroSpeechFile, generateRhubarbVisemes } = require('./tts');
 const { createTtsSettingsStore } = require('./ttsSettings');
 const { requestDatabaseUserKey, userDisplayName } = require('./userIdentity');
+const { normalizeFactoids } = require('./memoryFactoids');
+const { createSttService } = require('./stt');
+const { createMicSettingsStore } = require('./micSettings');
+const { createVoicePipeline } = require('./voicePipeline');
 
 const app = express();
 
 const PORT = process.env.PORT || 3000;
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'llama2';
 const MEMORY_SUMMARY_INTERVALS = {
   short: Number(process.env.MEMORY_SHORT_SUMMARY_INTERVAL || 6),
   medium: Number(process.env.MEMORY_MEDIUM_SUMMARY_INTERVAL || 20),
@@ -39,7 +43,7 @@ const MEMORY_SUMMARY_INTERVALS = {
 };
 const MEMORY_BUDGET = {
   modelContextTokens: Number(process.env.MEMORY_MODEL_CONTEXT_TOKENS || process.env.OLLAMA_MODEL_CONTEXT_TOKENS || 4096),
-  triggerRatio: Number(process.env.MEMORY_CONTEXT_TRIGGER_RATIO || 0.5),
+  triggerRatio: Number(process.env.MEMORY_CONTEXT_TRIGGER_RATIO || 0.75),
   promptReserveTokens: Number(process.env.MEMORY_PROMPT_RESERVE_TOKENS || 1200),
   maxWords: {
     short: Number(process.env.MEMORY_SHORT_MAX_WORDS || 120),
@@ -47,6 +51,8 @@ const MEMORY_BUDGET = {
     long: Number(process.env.MEMORY_LONG_MAX_WORDS || 400)
   }
 };
+const BOB_ROUTER_OPTIONS = Object.freeze({ temperature: 0, num_predict: 320 });
+const BOB_RESPONSE_OPTIONS = Object.freeze({ temperature: 0.2, num_predict: 220 });
 // Support custom OLLAMA_BIN path (useful on Windows where ollama may not be on PATH)
 const OLLAMA_BIN = process.env.OLLAMA_BIN || 'ollama';
 const DEPLOYMENT_ENV = process.env.DEPLOYMENT_ENV || process.env.NODE_ENV || 'development';
@@ -55,7 +61,6 @@ const ROUTER_MODEL_MIN_SIZE_B = Number(process.env.OLLAMA_ROUTER_MODEL_MIN_B || 
 const AUTO_MODEL_FALLBACK_MIN_SIZE_B = Number(process.env.OLLAMA_AUTO_MODEL_FALLBACK_MIN_B || 2);
 const BOB_STAGE_DEFINITIONS_PATH = process.env.BOB_STAGE_DEFINITIONS_PATH || path.join(__dirname, '..', '.bob-stage-definitions.json');
 const BOB_SKILL_DEFINITIONS_PATH = process.env.BOB_SKILL_DEFINITIONS_PATH || path.join(__dirname, '..', '.bob-skill-definitions.json');
-const MEMORY_IDLE_MERGE_MS = Math.max(1000, Number(process.env.MEMORY_IDLE_MERGE_MS || 60 * 1000));
 
 // instantiate logger early so top-level functions (loadRules, routes) can use it without causing a TDZ
 const logger = new Logger({ bufferSize: 2000 });
@@ -68,12 +73,43 @@ const activity = createActivityMonitor(logger);
 const yahoo = createYahooStore(logger);
 const userChat = createUserChatStore(logger);
 const ollamaConfig = createOllamaConfigStore(logger);
+const debugSettings = createDebugSettingsStore(logger);
+const micSettings = createMicSettingsStore(logger);
+const stt = createSttService({ logger, security });
+const voicePipeline = createVoicePipeline({
+  logger,
+  security,
+  defaultModel: requireInstalledDefaultOllamaModel,
+  runTurn: runBobTurn,
+  synthesizeSpeech: synthesizeConfiguredSpeech,
+  ttsProvider: () => ttsSettings.current().provider || 'kokoro'
+});
 const bobContextUsage = new Map();
 const memoryEventClients = new Map();
-const memoryIdleTimers = new Map();
-const memoryLastModels = new Map();
 const ttsGeneratedAudio = new Map();
 const TTS_GENERATED_AUDIO_TTL_MS = Number(process.env.TTS_GENERATED_AUDIO_TTL_MS || 5 * 60 * 1000);
+
+function defaultOllamaModel() {
+  return ollamaConfig.current().defaultModel || '';
+}
+
+function requireDefaultOllamaModel() {
+  const model = defaultOllamaModel();
+  if (model) return model;
+  const error = new Error('No default Ollama model configured. Select a default model in Models admin.');
+  error.statusCode = 400;
+  throw error;
+}
+
+async function requireInstalledDefaultOllamaModel() {
+  const model = requireDefaultOllamaModel();
+  const installedModels = await getInstalledOllamaModels();
+  const installedNames = installedModels.map(normalizeInstalledOllamaModelName).filter(Boolean);
+  if (installedNames.includes(model)) return model;
+  const error = new Error(`Configured default Ollama model "${model}" is not installed. Select an installed default model in Models admin.`);
+  error.statusCode = 400;
+  throw error;
+}
 
 function validateProductionConfig() {
   if (DEPLOYMENT_ENV !== 'production') return;
@@ -132,6 +168,10 @@ app.get('/health', (req, res) => {
 app.use(security.authenticate);
 app.use(admin.attachRoles);
 app.use(activity.record);
+app.use((req, res, next) => {
+  if (req.user?.sub) markOllamaUserPresence(req);
+  next();
+});
 app.post('/auth/logout', security.logout);
 app.get('/api/auth/me', (req, res) => {
   const user = req.user || {};
@@ -143,6 +183,18 @@ app.get('/api/auth/me', (req, res) => {
       subject: user.sub || '',
       roles: req.roles || ['user'],
       isAdmin: Boolean(req.roles?.includes('admin'))
+    }
+  });
+});
+
+app.post('/api/ollama/presence', (req, res) => {
+  const presence = markOllamaUserPresence(req);
+  res.json({
+    ok: true,
+    data: {
+      activeUsers: presence.activeUsers,
+      defaultModel: defaultOllamaModel(),
+      config: ollamaConfig.current()
     }
   });
 });
@@ -184,9 +236,10 @@ function withServerStartAssetVersion(url = '') {
 }
 
 function injectServerStartAssetVersions(html = '') {
-  return String(html || '').replace(/\b(src|href)=(["'])(\/[^"']+)\2/g, (_match, attribute, quote, url) => {
+  const withVersionedAssets = String(html || '').replace(/\b(src|href)=(["'])(\/[^"']+)\2/g, (_match, attribute, quote, url) => {
     return `${attribute}=${quote}${withServerStartAssetVersion(url)}${quote}`;
   });
+  return withVersionedAssets.replace('</head>', `<script>window.__assetVersion=${JSON.stringify(ASSET_VERSION)};</script></head>`);
 }
 
 // Serve index.html dynamically and inject a cache-busting query param for included assets.
@@ -219,14 +272,23 @@ app.use('/vendor/lucide', express.static(path.join(__dirname, '..', 'node_module
 app.use('/vendor/chart.js', express.static(path.join(__dirname, '..', 'node_modules', 'chart.js', 'dist')));
 
 async function synthesizeConfiguredSpeech(text, lang, provider = ttsSettings.current().provider, options = {}) {
+  const resolved = resolveTtsProvider(provider, ttsSettings.current().provider);
+  if (resolved === 'kokoro') return synthesizeKokoroSpeech(text);
   return synthesizePiperSpeech(text, buildPiperEnv(options.piper));
 }
 
 async function synthesizeConfiguredSpeechFile(text, lang, provider = ttsSettings.current().provider, options = {}) {
+  const resolved = resolveTtsProvider(provider, ttsSettings.current().provider);
+  if (resolved === 'kokoro') return synthesizeKokoroSpeechFile(text);
   return synthesizePiperSpeechFile(text, buildPiperEnv(options.piper));
 }
 
 function ttsReadinessError(provider) {
+  if (provider === 'kokoro') {
+    const kokoro = getKokoroRuntimeStatus();
+    if (!kokoro.binExists) return `Kokoro executable is not mounted or readable at ${kokoro.bin}.`;
+    return '';
+  }
   if (provider !== 'piper') return '';
   const piper = getPiperRuntimeStatus();
   if (!piper.hasModel) return 'Piper is not configured. Set TTS_PIPER_MODEL to a Piper .onnx voice model path.';
@@ -379,12 +441,17 @@ app.get('/api/tts/status', async (req, res) => {
   const defaults = ttsSettings.current();
   const piperConfig = getPiperConfigDetails();
   const piperRuntime = getPiperRuntimeStatus();
+  const kokoroRuntime = getKokoroRuntimeStatus();
   const rhubarbRuntime = getRhubarbRuntimeStatus();
   res.json({
     ok: true,
     data: {
       provider: defaults.provider,
-      providerLabel: defaults.provider === 'piper' ? 'Piper local voice' : defaults.provider,
+      providerLabel: defaults.provider === 'kokoro'
+        ? 'Kokoro local voice'
+        : defaults.provider === 'piper'
+          ? 'Piper local voice'
+          : defaults.provider,
       defaultLang: defaults.lang || 'en',
       defaults: {
         piperSpeaker: defaults.piperSpeaker || '',
@@ -406,10 +473,82 @@ app.get('/api/tts/status', async (req, res) => {
       },
       piperConfig,
       piperRuntime,
+      kokoroRuntime,
       rhubarbRuntime,
-      piperConfigured: piperRuntime.hasModel
+      piperConfigured: piperRuntime.hasModel,
+      kokoroConfigured: kokoroRuntime.binExists
     }
   });
+});
+
+app.get('/api/stt/status', (req, res) => {
+  res.json({ ok: true, data: stt.status() });
+});
+
+app.post('/api/stt/token', (req, res) => {
+  res.json({
+    ok: true,
+    data: {
+      token: stt.createSocketToken(req.user || {}),
+      expiresInMs: 60 * 1000
+    }
+  });
+});
+
+app.get('/api/voice/pipeline/status', (req, res) => {
+  res.json({ ok: true, data: voicePipeline.status() });
+});
+
+app.post('/api/voice/pipeline/token', (req, res) => {
+  res.json({
+    ok: true,
+    data: {
+      token: voicePipeline.createSocketToken(req.user || {}),
+      expiresInMs: 60 * 1000
+    }
+  });
+});
+
+app.get('/api/mic/settings', (req, res) => {
+  res.json({
+    ok: true,
+    data: {
+      ...micSettings.current(),
+      stt: stt.status(),
+      voicePipeline: voicePipeline.status()
+    }
+  });
+});
+
+app.get('/api/admin/mic-settings', admin.requireAdmin, (req, res) => {
+  res.json({
+    ok: true,
+    data: {
+      ...micSettings.current(),
+      settingsPath: micSettings.settingsPath,
+      stt: stt.status(),
+      voicePipeline: voicePipeline.status()
+    }
+  });
+});
+
+app.post('/api/admin/mic-settings', admin.requireAdmin, (req, res) => {
+  try {
+    const saved = micSettings.save(req.body || {});
+    logger.info(`Mic settings updated by ${req.user?.email || req.user?.preferred_username || req.user?.name || 'admin'}`);
+    res.json({
+      ok: true,
+      data: {
+        ...saved,
+        settingsPath: micSettings.settingsPath,
+        stt: stt.status(),
+        voicePipeline: voicePipeline.status()
+      }
+    });
+  } catch (err) {
+    logger.error('mic settings save failed', err?.message || err);
+    res.status(500).json({ ok: false, error: 'Could not save mic settings' });
+  }
 });
 
 app.post('/api/tts/settings', admin.requireAdmin, (req, res) => {
@@ -420,6 +559,21 @@ app.post('/api/tts/settings', admin.requireAdmin, (req, res) => {
   } catch (err) {
     logger.error('tts settings save failed', err?.message || err);
     res.status(500).json({ ok: false, error: 'Could not save TTS settings' });
+  }
+});
+
+app.get('/api/admin/debug-settings', admin.requireAdmin, (req, res) => {
+  res.json({ ok: true, data: debugSettings.current() });
+});
+
+app.post('/api/admin/debug-settings', admin.requireAdmin, (req, res) => {
+  try {
+    const saved = debugSettings.save(req.body || {});
+    logger.info(`Debug settings updated by ${req.user?.email || req.user?.preferred_username || req.user?.name || 'admin'}`);
+    res.json({ ok: true, data: saved });
+  } catch (err) {
+    logger.error('debug settings save failed', err?.message || err);
+    res.status(500).json({ ok: false, error: 'Could not save debug settings' });
   }
 });
 
@@ -509,6 +663,28 @@ function getErrorText(err) {
   return err?.message || String(err);
 }
 
+async function getErrorTextAsync(err) {
+  const data = err?.response?.data;
+  if (!data || typeof data.pipe !== 'function') return getErrorText(err);
+
+  try {
+    const chunks = [];
+    for await (const chunk of data) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    }
+    const text = Buffer.concat(chunks).toString('utf8').trim();
+    if (!text) return getErrorText(err);
+    try {
+      const parsed = JSON.parse(text);
+      return typeof parsed?.error === 'string' ? parsed.error : JSON.stringify(parsed);
+    } catch (jsonErr) {
+      return text;
+    }
+  } catch (streamErr) {
+    return getErrorText(err);
+  }
+}
+
 function memoryEventUserKey(req) {
   try {
     return requestDatabaseUserKey(req);
@@ -540,66 +716,22 @@ function publishMemoryChanged({ req, type = 'memory', count = 0 } = {}) {
   if (!clients.size) memoryEventClients.delete(userKey);
 }
 
-function memoryIdleMergeKey(req, conversationId = 'default') {
-  return `${requestDatabaseUserKey(req)}:${conversationId}`;
-}
-
-function memoryReqSnapshot(req) {
-  return {
-    user: { ...(req?.user || {}) },
-    ai: req?.ai ? { ...req.ai } : undefined
-  };
-}
-
-function scheduleMemoryIdleMerge({ req, model, conversationId = 'default', reason = 'idle' } = {}) {
-  let key;
-  try {
-    key = memoryIdleMergeKey(req, conversationId);
-  } catch (err) {
-    return;
-  }
-
-  if (memoryIdleTimers.has(key)) {
-    clearTimeout(memoryIdleTimers.get(key));
-  }
-  if (model) memoryLastModels.set(key, model);
-
-  const snapshot = memoryReqSnapshot(req);
-  const mergeModel = model || memoryLastModels.get(key) || DEFAULT_MODEL;
-  const timer = setTimeout(() => {
-    memoryIdleTimers.delete(key);
-    memorySkill.requestCascadeUpdate({
-      req: snapshot,
-      model: mergeModel,
-      conversationId,
-      scopes: ['long', 'medium', 'short'],
-      reason: `idle-${reason}`
-    }).catch(err => logger.warn('Idle memory merge failed', getErrorText(err)));
-  }, MEMORY_IDLE_MERGE_MS);
-
-  if (typeof timer.unref === 'function') timer.unref();
-  memoryIdleTimers.set(key, timer);
-}
-
-function clearMemoryIdleMerge(req, conversationId = 'default') {
-  let key;
-  try {
-    key = memoryIdleMergeKey(req, conversationId);
-  } catch (err) {
-    return;
-  }
-  if (!memoryIdleTimers.has(key)) return;
-  clearTimeout(memoryIdleTimers.get(key));
-  memoryIdleTimers.delete(key);
-}
-
 const ollamaModelStatusClients = new Set();
 const activeOllamaModelRequests = new Map();
+const activeUserPresence = new Map();
 let ollamaModelStatusPublishPromise = null;
 let ollamaModelStatusPendingReason = '';
 let ollamaModelStatusExpireTimer = null;
 let ollamaModelStatusSettledTimer = null;
+let ollamaPresenceSweepTimer = null;
+let ollamaIdleUnloadTimer = null;
+let ollamaDefaultWarmPromise = null;
+let ollamaDefaultLoadedForPresence = false;
+let ollamaPresenceModel = '';
+let lastOllamaPresenceError = '';
 let lastOllamaModelStatusSnapshot = null;
+const OLLAMA_LOAD_PROMPT = 'Return OK.';
+const OLLAMA_LOAD_OPTIONS = Object.freeze({ num_predict: 1, temperature: 0 });
 
 async function requestOllamaApi(method, endpoint, data, timeout = 10000) {
   try {
@@ -631,6 +763,209 @@ function getActiveOllamaModels() {
           newestStartedAt: detail.newestStartedAt
         }))
     }));
+}
+
+function getActivePresenceCount() {
+  const now = Date.now();
+  const ttlMs = ollamaConfig.current().presenceTtlMs;
+  for (const [key, presence] of activeUserPresence.entries()) {
+    if (now - Number(presence?.lastSeenAt || 0) > ttlMs) activeUserPresence.delete(key);
+  }
+  return activeUserPresence.size;
+}
+
+function scheduleOllamaPresenceSweep() {
+  if (ollamaPresenceSweepTimer) clearTimeout(ollamaPresenceSweepTimer);
+  const delay = Math.max(1000, Math.min(ollamaConfig.current().presenceTtlMs, 30000));
+  ollamaPresenceSweepTimer = setTimeout(() => {
+    ollamaPresenceSweepTimer = null;
+    handleOllamaPresenceChange('presence-sweep');
+  }, delay);
+}
+
+function markOllamaUserPresence(req) {
+  const user = req.user || {};
+  if (!user.sub) return { activeUsers: getActivePresenceCount(), warmed: false };
+  const key = requestDatabaseUserKey(req);
+  if (!key) return { activeUsers: getActivePresenceCount(), warmed: false };
+  activeUserPresence.set(key, {
+    userKey: key,
+    lastSeenAt: Date.now()
+  });
+  scheduleOllamaPresenceSweep();
+  handleOllamaPresenceChange('presence-heartbeat');
+  return {
+    activeUsers: getActivePresenceCount(),
+    warmed: true
+  };
+}
+
+function keepAliveForActiveUsers() {
+  const config = ollamaConfig.current();
+  return ollamaKeepAlivePayload(getActivePresenceCount() > 0 ? config.activeKeepAlive : config.keepAlive);
+}
+
+function normalizeInstalledOllamaModelName(model) {
+  return String(typeof model === 'string' ? model : model?.name || model?.model || '').trim();
+}
+
+async function resolvePresenceOllamaModel() {
+  const installedModels = await getInstalledOllamaModels();
+  const installedNames = installedModels.map(normalizeInstalledOllamaModelName).filter(Boolean);
+  if (installedNames.length === 0) {
+    logger.warn('Cannot warm default Ollama model because no installed models were returned by Ollama.');
+    return '';
+  }
+
+  const configuredDefaultModel = defaultOllamaModel();
+  if (configuredDefaultModel && !isAutoModel(configuredDefaultModel) && installedNames.includes(configuredDefaultModel)) {
+    return configuredDefaultModel;
+  }
+
+  if (!configuredDefaultModel || isAutoModel(configuredDefaultModel)) {
+    lastOllamaPresenceError = 'Default model warm skipped because no explicit default model is configured.';
+  } else {
+    lastOllamaPresenceError = `Default model warm skipped because configured default model ${configuredDefaultModel} is not installed.`;
+  }
+  logger.warn(lastOllamaPresenceError);
+  return '';
+}
+
+function handleOllamaPresenceChange(reason = 'presence') {
+  const activeUsers = getActivePresenceCount();
+  if (activeUsers > 0) {
+    if (ollamaIdleUnloadTimer) {
+      clearTimeout(ollamaIdleUnloadTimer);
+      ollamaIdleUnloadTimer = null;
+    }
+    warmDefaultOllamaModel(reason);
+    publishOllamaModelStatus(reason);
+    scheduleOllamaPresenceSweep();
+    return;
+  }
+
+  if (ollamaIdleUnloadTimer || !ollamaDefaultLoadedForPresence) {
+    publishOllamaModelStatus(reason);
+    return;
+  }
+  const delay = ollamaConfig.current().idleUnloadDelayMs;
+  ollamaIdleUnloadTimer = setTimeout(() => {
+    ollamaIdleUnloadTimer = null;
+    if (getActivePresenceCount() > 0) {
+      handleOllamaPresenceChange('presence-returned');
+      return;
+    }
+    unloadDefaultOllamaModel('presence-idle');
+  }, delay);
+  publishOllamaModelStatus(reason);
+}
+
+async function warmDefaultOllamaModel(reason = 'presence-warm') {
+  if (ollamaDefaultWarmPromise) return ollamaDefaultWarmPromise;
+  let model = '';
+  try {
+    model = await resolvePresenceOllamaModel();
+  } catch (err) {
+    lastOllamaPresenceError = `Default model warm could not resolve an installed model: ${getErrorText(err)}`;
+    logger.warn(lastOllamaPresenceError);
+    publishOllamaModelStatus('presence-warm-resolve-error');
+    return null;
+  }
+  if (!model) return null;
+  const keepAlive = ollamaKeepAlivePayload(ollamaConfig.current().activeKeepAlive);
+  const finishActivity = beginOllamaModelActivity(model, 'presence-warm');
+  logger.info(`Warming default Ollama model ${model} with keep_alive ${keepAlive} (${reason})`);
+  ollamaPresenceModel = model;
+  ollamaDefaultWarmPromise = axios.post(`${OLLAMA_URL}/api/generate`, {
+    model,
+    prompt: OLLAMA_LOAD_PROMPT,
+    keep_alive: keepAlive,
+    stream: false,
+    options: OLLAMA_LOAD_OPTIONS
+  }, { timeout: 120000 })
+    .then(resp => {
+      ollamaDefaultLoadedForPresence = true;
+      lastOllamaPresenceError = '';
+      publishOllamaModelStatus('presence-warm-finished');
+      unloadNonDefaultOllamaModels(model, 'presence-default-reconcile');
+      return resp.data;
+    })
+    .catch(err => {
+      lastOllamaPresenceError = `Default model warm failed for ${model}: ${getErrorText(err)}`;
+      logger.warn(lastOllamaPresenceError);
+      publishOllamaModelStatus('presence-warm-error');
+      return null;
+    })
+    .finally(() => {
+      finishActivity();
+      ollamaDefaultWarmPromise = null;
+    });
+  return ollamaDefaultWarmPromise;
+}
+
+async function unloadNonDefaultOllamaModels(defaultModel, reason = 'default-reconcile') {
+  const keepModel = String(defaultModel || '').trim();
+  if (!keepModel) return [];
+  let running = [];
+  try {
+    const response = await axios.get(`${OLLAMA_URL}/api/ps`, { timeout: 10000 });
+    running = Array.isArray(response.data?.models) ? response.data.models : [];
+  } catch (err) {
+    logger.warn(`Could not inspect loaded Ollama models for ${reason}`, getErrorText(err));
+    return [];
+  }
+
+  const loadedNames = [...new Set(running
+    .map(model => normalizeInstalledOllamaModelName(model))
+    .filter(name => name && name !== keepModel))];
+
+  await Promise.all(loadedNames.map(async model => {
+    const finishActivity = beginOllamaModelActivity(model, reason);
+    try {
+      logger.info(`Unloading non-default Ollama model ${model}; keeping default ${keepModel} (${reason})`);
+      await axios.post(`${OLLAMA_URL}/api/generate`, {
+        model,
+        prompt: OLLAMA_LOAD_PROMPT,
+        keep_alive: 0,
+        stream: false,
+        options: OLLAMA_LOAD_OPTIONS
+      }, { timeout: 30000 });
+      publishOllamaModelStatus(`${reason}-unloaded`);
+    } catch (err) {
+      logger.warn(`Non-default Ollama model unload failed for ${model}`, getErrorText(err));
+      publishOllamaModelStatus(`${reason}-error`);
+    } finally {
+      finishActivity();
+    }
+  }));
+  return loadedNames;
+}
+
+function unloadDefaultOllamaModel(reason = 'presence-idle') {
+  const model = ollamaPresenceModel || defaultOllamaModel();
+  if (!model || isAutoModel(model)) return Promise.resolve(null);
+  const finishActivity = beginOllamaModelActivity(model, 'presence-unload');
+  logger.info(`Unloading default Ollama model ${model} (${reason})`);
+  return axios.post(`${OLLAMA_URL}/api/generate`, {
+    model,
+    prompt: OLLAMA_LOAD_PROMPT,
+    keep_alive: 0,
+    stream: false,
+    options: OLLAMA_LOAD_OPTIONS
+  }, { timeout: 30000 })
+    .then(resp => {
+      ollamaDefaultLoadedForPresence = false;
+      ollamaPresenceModel = '';
+      lastOllamaPresenceError = '';
+      publishOllamaModelStatus('presence-unload-finished');
+      return resp.data;
+    })
+    .catch(err => {
+      logger.warn(`Default Ollama model unload failed for ${model}`, getErrorText(err));
+      publishOllamaModelStatus('presence-unload-error');
+      return null;
+    })
+    .finally(finishActivity);
 }
 
 function getOllamaActivityForModel(name) {
@@ -719,14 +1054,15 @@ function buildCachedOllamaModelStatusSnapshot(reason = 'activity-update') {
     ok: true,
     data: {
       url: OLLAMA_URL,
-      defaultModel: DEFAULT_MODEL,
+      defaultModel: defaultOllamaModel(),
       config: ollamaConfig.current(),
+      activeUsers: getActivePresenceCount(),
       version: null,
       installedCount: 0,
       models: [],
       running: [],
       activeModels: [],
-      errors: { version: null, models: null, running: null }
+      errors: { version: null, models: null, running: lastOllamaPresenceError || null }
     }
   };
   const runningModels = Array.isArray(base.data?.running)
@@ -766,10 +1102,15 @@ function buildCachedOllamaModelStatusSnapshot(reason = 'activity-update') {
     data: {
       ...base.data,
       url: OLLAMA_URL,
-      defaultModel: DEFAULT_MODEL,
+      defaultModel: defaultOllamaModel(),
       config: ollamaConfig.current(),
+      activeUsers: getActivePresenceCount(),
       running: [...runningModels, ...activeOnly],
-      activeModels: getActiveOllamaModels()
+      activeModels: getActiveOllamaModels(),
+      errors: {
+        ...(base.data?.errors || {}),
+        running: lastOllamaPresenceError || base.data?.errors?.running || null
+      }
     }
   };
 }
@@ -807,8 +1148,9 @@ async function buildOllamaModelStatusSnapshot(reason = 'update') {
     updatedAt: new Date().toISOString(),
     data: {
       url: OLLAMA_URL,
-      defaultModel: DEFAULT_MODEL,
+      defaultModel: defaultOllamaModel(),
       config: ollamaConfig.current(),
+      activeUsers: getActivePresenceCount(),
       version: version.data || null,
       installedCount: Array.isArray(tags.data?.models) ? tags.data.models.length : 0,
       models: tags.data?.models || [],
@@ -817,7 +1159,7 @@ async function buildOllamaModelStatusSnapshot(reason = 'update') {
       errors: {
         version: version.ok ? null : version.error,
         models: tags.ok ? null : tags.error,
-        running: running.ok ? null : running.error
+        running: lastOllamaPresenceError || (running.ok ? null : running.error)
       }
     }
   };
@@ -1121,6 +1463,13 @@ function skillDebugMetadata(req, entries = []) {
   };
 }
 
+function withDefaultOllamaOptions(options = {}, defaults = {}) {
+  return {
+    ...defaults,
+    ...(options && typeof options === 'object' && !Array.isArray(options) ? options : {})
+  };
+}
+
 function validateBobChatRawContract(rawOutput) {
   const raw = String(rawOutput || '').trim();
   let parsed = null;
@@ -1172,9 +1521,21 @@ function validateBobChatRawContract(rawOutput) {
   };
 }
 
-function applyBobChatFallbackIfNeeded({ req, prompt, contract, rawOutput }) {
-  if (String(contract?.response || '').trim()) return contract;
-  const fallback = buildBobChatFallbackResponse(req, prompt, String(rawOutput || '').trim() ? 'invalid-empty-response' : 'empty-model-output');
+function applyBobChatFallbackIfNeeded({ req, prompt, contract, rawOutput, validation = null, generateSummary = null }) {
+  const raw = String(rawOutput || '').trim();
+  const response = String(contract?.response || '').trim();
+  const invalidContract = validation && validation.valid === false;
+  const hitLengthLimit = String(generateSummary?.doneReason || '').toLowerCase() === 'length';
+  const oversizedResponse = response.length > 1200;
+  if (response && !invalidContract && !hitLengthLimit && !oversizedResponse) return contract;
+  const fallbackReason = !raw
+    ? 'empty-model-output'
+    : hitLengthLimit
+      ? 'model-hit-output-limit'
+      : oversizedResponse
+        ? 'oversized-model-output'
+        : 'invalid-model-contract';
+  const fallback = buildBobChatFallbackResponse(req, prompt, fallbackReason);
   return {
     response: fallback.response,
     metadata: {
@@ -1228,22 +1589,42 @@ async function generateOllamaText(model, prompt, options = {}, requestOptions = 
   return extractOllamaText(response.data).trim();
 }
 
+function postOllamaGeneratePayload(payload, { responseType = 'json' } = {}) {
+  return axios.post(`${OLLAMA_URL}/api/generate`, payload, {
+    responseType,
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 120000
+  });
+}
+
+async function shouldRetryWithoutThinkFalse(err, requestOptions = {}) {
+  if (requestOptions.think !== false) return false;
+  const status = Number(err?.response?.status);
+  if (status && status !== 400) return false;
+  const error = await getErrorTextAsync(err);
+  return /\bthink(?:ing)?\b/i.test(error) && /\b(false|unsupported|invalid|unknown|unrecognized|field|parameter)\b/i.test(error);
+}
+
 async function generateOllama(model, prompt, options = {}, requestOptions = {}) {
   const finishActivity = beginOllamaModelActivity(model, requestOptions.reason || 'generate');
+  const payload = {
+    model,
+    prompt,
+    stream: false,
+    ...(requestOptions.think === true || requestOptions.think === false ? { think: requestOptions.think } : {}),
+    ...(requestOptions.format ? { format: requestOptions.format } : {}),
+    keep_alive: keepAliveForActiveUsers(),
+    options
+  };
   try {
-    return await axios.post(`${OLLAMA_URL}/api/generate`, {
-      model,
-      prompt,
-      stream: false,
-      ...(requestOptions.think !== undefined ? { think: Boolean(requestOptions.think) } : {}),
-      ...(requestOptions.format ? { format: requestOptions.format } : {}),
-      keep_alive: ollamaConfig.current().keepAlive,
-      options
-    }, {
-      responseType: 'json',
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 120000
-    });
+    try {
+      return await postOllamaGeneratePayload(payload, { responseType: 'json' });
+    } catch (err) {
+      if (!await shouldRetryWithoutThinkFalse(err, requestOptions)) throw err;
+      logger.warn(`Ollama rejected think:false for ${requestOptions.reason || 'generate'}; retrying without think flag.`);
+      const { think, ...retryPayload } = payload;
+      return await postOllamaGeneratePayload(retryPayload, { responseType: 'json' });
+    }
   } finally {
     finishActivity();
   }
@@ -1252,22 +1633,34 @@ async function generateOllama(model, prompt, options = {}, requestOptions = {}) 
 async function generateOllamaStream(model, prompt, options = {}, requestOptions = {}) {
   const finishActivity = beginOllamaModelActivity(model, requestOptions.reason || 'generate');
   try {
-    const response = await axios.post(`${OLLAMA_URL}/api/generate`, {
+    const payload = {
       model,
       prompt,
       stream: true,
-      ...(requestOptions.think !== undefined ? { think: Boolean(requestOptions.think) } : {}),
+      ...(requestOptions.think === true || requestOptions.think === false ? { think: requestOptions.think } : {}),
       ...(requestOptions.format ? { format: requestOptions.format } : {}),
-      keep_alive: ollamaConfig.current().keepAlive,
+      keep_alive: keepAliveForActiveUsers(),
       options
-    }, {
-      responseType: 'stream',
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 120000
-    });
+    };
+    let response;
+    try {
+      response = await postOllamaGeneratePayload(payload, { responseType: 'stream' });
+    } catch (err) {
+      if (await shouldRetryWithoutThinkFalse(err, requestOptions)) {
+        logger.warn(`Ollama rejected think:false for ${requestOptions.reason || 'generate'}; retrying stream without think flag.`);
+        const { think, ...retryPayload } = payload;
+        response = await postOllamaGeneratePayload(retryPayload, { responseType: 'stream' });
+      } else {
+      const error = new Error(await getErrorTextAsync(err));
+      error.response = err?.response;
+      error.cause = err;
+      throw error;
+      }
+    }
 
     let buffer = '';
     let accumulated = '';
+    let thinkingAccumulated = '';
     let finalPayload = {};
     const responseSentenceEmitter = createStreamingResponseSentenceEmitter();
     const publishStreamPiece = (piece, parsed) => {
@@ -1328,8 +1721,9 @@ async function generateOllamaStream(model, prompt, options = {}, requestOptions 
         if (!text || settled) return;
         const parsed = JSON.parse(text);
         const piece = String(parsed.response || parsed.message?.content || '');
+        if (parsed.thinking) thinkingAccumulated += String(parsed.thinking || '');
         publishStreamPiece(piece, parsed);
-        finalPayload = { ...parsed, response: accumulated || parsed.response || '' };
+        finalPayload = { ...parsed, response: accumulated || parsed.response || '', thinking: thinkingAccumulated || parsed.thinking || '' };
         if (parsed.done === true) finish();
       };
       const onData = chunk => {
@@ -1369,7 +1763,11 @@ async function generateOllamaStream(model, prompt, options = {}, requestOptions 
 
 function extractOllamaText(data = {}) {
   const normalized = normalizeOllamaGenerateData(data);
-  return String(normalized?.response || normalized?.message?.content || '');
+  const visibleText = String(normalized?.response || normalized?.message?.content || '');
+  if (visibleText.trim()) return visibleText;
+  const thinkingText = String(normalized?.thinking || '').trim();
+  const thinkingJson = parseJsonObject(thinkingText);
+  return thinkingJson ? JSON.stringify(thinkingJson) : '';
 }
 
 function summarizeOllamaGenerateData(data = {}) {
@@ -1472,8 +1870,7 @@ async function probeOllamaModel(model) {
       model: name,
       prompt: 'Reply with exactly: ok',
       stream: false,
-      think: false,
-      keep_alive: ollamaConfig.current().keepAlive,
+      keep_alive: keepAliveForActiveUsers(),
       options: { temperature: 0, num_predict: 64 }
     }, {
       responseType: 'json',
@@ -1495,9 +1892,8 @@ async function probeOllamaModel(model) {
       model: name,
       prompt: 'Return minified JSON exactly: {"ok":true}',
       stream: false,
-      think: false,
       format: 'json',
-      keep_alive: ollamaConfig.current().keepAlive,
+      keep_alive: keepAliveForActiveUsers(),
       options: { temperature: 0, num_predict: 128 }
     }, {
       responseType: 'json',
@@ -1550,7 +1946,7 @@ async function classifyBobEmotion({ model, prompt, response, recentMessages = []
   const heuristic = fallback || heuristicBobEmotion({ prompt, response });
 
   try {
-    const rawOutput = await generateOllamaText(model, emotionPrompt, { temperature: 0.1 }, { format: 'json', think: false, reason: 'bob-emotion' });
+    const rawOutput = await generateOllamaText(model, emotionPrompt, { temperature: 0.1 }, { format: 'json', reason: 'bob-emotion' });
     const contract = parseBobEmotionContract(rawOutput, heuristic);
     return {
       ...contract,
@@ -1575,7 +1971,6 @@ async function buildBobPromptContext({ req, prompt, conversationId = 'default' }
     ? await memory.getUnprocessedMessages({
       req,
       summaries,
-      limit: memory.summaryScopes.short?.limit || 24,
       conversationId
     })
     : await memory.getRecent({ req, conversationId });
@@ -1613,7 +2008,6 @@ async function runWebSearchSkill({ req, model, prompt, query: routedQuery = '', 
   const summaryPrompt = buildWebSummaryPrompt(prompt, query, results);
   const rawSummary = await generateOllamaText(model, summaryPrompt, { temperature: 0.2 }, {
     format: 'json',
-    think: false,
     reason: 'web-search-summary',
     ...(typeof onLiveOutput === 'function' ? {
       onChunk: (chunk, info = {}) => onLiveOutput({
@@ -1654,6 +2048,7 @@ async function runWebSearchSkill({ req, model, prompt, query: routedQuery = '', 
     contract.output.response = fallback;
     contract.output.metadata.contractValid = false;
   }
+  contract.output.response = appendSourceLinks(contract.output.response, contract.output.sources);
 
   return {
     query,
@@ -1696,8 +2091,10 @@ function parseJsonTemplate(value, fallback) {
   }
 }
 
+const BOB_STAGE_TAG_PATTERN = 'CHAT INPUT|CHAT INPUIT|REQUEST ID|REQUEST TIMESTAMP|TIMESTAMP|SESSION ID|USER ID|USER NAME|AVAILABLE SKILLS|FACTOIDS|CHAT MEMORY|SHORT TERM MEMORY|MEDIUM TERM MEMORY|LONG TERM MEMORY|SEARCH QUERY|SEARCH RESULTS';
+
 function normalizeStageFileTemplateTokens(raw) {
-  return String(raw || '').replace(/\[\[\s*(CHAT INPUT|CHAT INPUIT|REQUEST ID|REQUEST TIMESTAMP|TIMESTAMP|SESSION ID|USER ID|USER NAME|AVAILABLE SKILLS|FACTOIDS|CHAT MEMORY|SEARCH QUERY|SEARCH RESULTS)(?:\s+(\d+))?\s*\]\]/gi, (_match, tag, limit) => {
+  return String(raw || '').replace(new RegExp(`\\[\\[\\s*(${BOB_STAGE_TAG_PATTERN})(?:\\s+(\\d+))?\\s*\\]\\]`, 'gi'), (_match, tag, limit) => {
     const normalized = `[${String(tag || '').toUpperCase()}${limit ? ` ${limit}` : ''}]`;
     return JSON.stringify(normalized);
   });
@@ -1914,12 +2311,13 @@ function buildBobRouterRequestContext(req) {
   };
 }
 
-function collectStageTagLimits(value, limits = { factoids: 0, chatMemory: 0 }) {
+function collectStageTagLimits(value, limits = { factoids: 0, chatMemory: false, summaries: false }) {
   if (typeof value === 'string') {
-    for (const match of value.matchAll(/\[(FACTOIDS|CHAT MEMORY)(?:\s+(\d+))?\]/gi)) {
-      const limit = safePositiveLimit(match[2], 5);
-      if (match[1].toUpperCase() === 'FACTOIDS') limits.factoids = Math.max(limits.factoids, limit);
-      if (match[1].toUpperCase() === 'CHAT MEMORY') limits.chatMemory = Math.max(limits.chatMemory, limit);
+    for (const match of value.matchAll(/\[(FACTOIDS|CHAT MEMORY|SHORT TERM MEMORY|MEDIUM TERM MEMORY|LONG TERM MEMORY)(?:\s+(\d+))?\]/gi)) {
+      const tag = match[1].toUpperCase();
+      if (tag === 'FACTOIDS') limits.factoids = Math.max(limits.factoids, match[2] ? safePositiveLimit(match[2], 5, 500) : 500);
+      if (tag === 'CHAT MEMORY') limits.chatMemory = true;
+      if (tag === 'SHORT TERM MEMORY' || tag === 'MEDIUM TERM MEMORY' || tag === 'LONG TERM MEMORY') limits.summaries = true;
     }
     return limits;
   }
@@ -1935,9 +2333,9 @@ function collectStageTagLimits(value, limits = { factoids: 0, chatMemory: 0 }) {
 
 function replaceStageTags(value, data) {
   if (typeof value === 'string') {
-    const exact = value.trim().match(/^\[(CHAT INPUT|CHAT INPUIT|REQUEST ID|REQUEST TIMESTAMP|TIMESTAMP|SESSION ID|USER ID|USER NAME|AVAILABLE SKILLS|FACTOIDS|CHAT MEMORY|SEARCH QUERY|SEARCH RESULTS)(?:\s+(\d+))?\]$/i);
+    const exact = value.trim().match(new RegExp(`^\\[(${BOB_STAGE_TAG_PATTERN})(?:\\s+(\\d+))?\\]$`, 'i'));
     if (exact) return stageTagValue(exact[1], exact[2], data);
-    return value.replace(/\[(CHAT INPUT|CHAT INPUIT|REQUEST ID|REQUEST TIMESTAMP|TIMESTAMP|SESSION ID|USER ID|USER NAME|AVAILABLE SKILLS|FACTOIDS|CHAT MEMORY|SEARCH QUERY|SEARCH RESULTS)(?:\s+(\d+))?\]/gi, (_match, tag, limit) => {
+    return value.replace(new RegExp(`\\[(${BOB_STAGE_TAG_PATTERN})(?:\\s+(\\d+))?\\]`, 'gi'), (_match, tag, limit) => {
       const replacement = stageTagValue(tag, limit, data);
       return typeof replacement === 'string' ? replacement : JSON.stringify(replacement);
     });
@@ -1958,8 +2356,11 @@ function stageTagValue(tag, limit, data) {
   if (name === 'USER ID') return data.request.userId || 'NO DATA';
   if (name === 'USER NAME') return data.request.userName || 'NO DATA';
   if (name === 'AVAILABLE SKILLS') return BOB_ROUTER_SKILLS;
-  if (name === 'FACTOIDS') return data.factoids.length ? data.factoids.slice(0, safePositiveLimit(limit, data.factoids.length || 5)) : 'NO DATA';
-  if (name === 'CHAT MEMORY') return data.chatMemory.length ? data.chatMemory.slice(0, safePositiveLimit(limit, data.chatMemory.length || 5)) : 'NO DATA';
+  if (name === 'FACTOIDS') return data.factoids.length ? (limit ? data.factoids.slice(0, safePositiveLimit(limit, data.factoids.length || 5, 500)) : data.factoids) : 'NO DATA';
+  if (name === 'CHAT MEMORY') return data.chatMemory.length ? (limit ? data.chatMemory.slice(0, safePositiveLimit(limit, data.chatMemory.length || 5, 1000)) : data.chatMemory) : 'NO DATA';
+  if (name === 'SHORT TERM MEMORY') return data.memorySummaries.short || 'NO DATA';
+  if (name === 'MEDIUM TERM MEMORY') return data.memorySummaries.medium || 'NO DATA';
+  if (name === 'LONG TERM MEMORY') return data.memorySummaries.long || 'NO DATA';
   if (name === 'SEARCH QUERY') return data.searchQuery || 'NO DATA';
   if (name === 'SEARCH RESULTS') return data.searchResults?.length ? data.searchResults.slice(0, safePositiveLimit(limit, data.searchResults.length || 5)) : 'NO DATA';
   return 'NO DATA';
@@ -1967,7 +2368,7 @@ function stageTagValue(tag, limit, data) {
 
 function bobStageTagSummary(data) {
   return {
-    supported: ['[CHAT INPUT]', '[REQUEST ID]', '[REQUEST TIMESTAMP]', '[SESSION ID]', '[USER ID]', '[USER NAME]', '[AVAILABLE SKILLS]', '[FACTOIDS #]', '[CHAT MEMORY #]', '[SEARCH QUERY]', '[SEARCH RESULTS #]'],
+    supported: ['[CHAT INPUT]', '[REQUEST ID]', '[REQUEST TIMESTAMP]', '[SESSION ID]', '[USER ID]', '[USER NAME]', '[AVAILABLE SKILLS]', '[FACTOIDS]', '[CHAT MEMORY]', '[SHORT TERM MEMORY]', '[MEDIUM TERM MEMORY]', '[LONG TERM MEMORY]', '[SEARCH QUERY]', '[SEARCH RESULTS #]'],
     resolved: {
       chatInput: data.prompt ? 'provided' : 'NO DATA',
       requestId: data.request.id || 'NO DATA',
@@ -1978,6 +2379,9 @@ function bobStageTagSummary(data) {
       availableSkills: BOB_ROUTER_SKILLS.length || 'NO DATA',
       factoids: data.factoids.length || 'NO DATA',
       chatMemory: data.chatMemory.length || 'NO DATA',
+      shortTermMemory: data.memorySummaries.short ? 'provided' : 'NO DATA',
+      mediumTermMemory: data.memorySummaries.medium ? 'provided' : 'NO DATA',
+      longTermMemory: data.memorySummaries.long ? 'provided' : 'NO DATA',
       searchQuery: data.searchQuery || 'NO DATA',
       searchResults: data.searchResults?.length || 'NO DATA'
     }
@@ -1986,15 +2390,22 @@ function bobStageTagSummary(data) {
 
 async function buildBobStageRenderContext({ req, prompt = '', values = [], query = '', results = [] } = {}) {
   const limits = collectStageTagLimits(values);
-  const [factoidsRaw, chatMemoryRaw] = await Promise.all([
+  const [factoidsRaw, chatMemoryRaw, summariesRaw] = await Promise.all([
     limits.factoids > 0 ? memory.getFactoids({ req, limit: limits.factoids }) : [],
-    limits.chatMemory > 0 ? memory.getMessages({ req, limit: limits.chatMemory }) : []
+    limits.chatMemory && typeof memory.getUnprocessedMessages === 'function' ? memory.getUnprocessedMessages({ req }) : [],
+    limits.summaries ? memory.getSummaries({ req }) : null
   ]);
+  const memorySummaries = {
+    short: String(summariesRaw?.short?.summary || '').trim(),
+    medium: String(summariesRaw?.medium?.summary || '').trim(),
+    long: String(summariesRaw?.long?.summary || '').trim()
+  };
   const data = {
     prompt: String(prompt || '').trim(),
     request: buildBobRouterRequestContext(req),
     factoids: formatStageFactoids(factoidsRaw),
     chatMemory: formatStageChatMemory(chatMemoryRaw),
+    memorySummaries,
     searchQuery: String(query || extractSearchQuery(prompt) || '').trim(),
     searchResults: Array.isArray(results) && results.length ? results : []
   };
@@ -2146,19 +2557,16 @@ function buildRouterTrace({ routerInput, routerRawOutput, route, routerGenerateD
 }
 
 async function selectBobTurnRouteAndModel({ req, prompt, requestedModel, modelRules }) {
-  const installedModels = isAutoModel(requestedModel) ? await getInstalledOllamaModels() : [];
-  const routerModelRoute = isAutoModel(requestedModel)
-    ? selectRouterModel({
-      installedModels,
-      defaultModel: DEFAULT_MODEL,
-      minSizeB: modelRules.routerMinSizeB
-    })
-    : {
-      model: requestedModel || DEFAULT_MODEL,
-      minSizeB: modelRules.routerMinSizeB,
-      candidates: [],
-      reason: 'Manual model selection uses the selected model for routing.'
-    };
+  const effectiveRequestedModel = isAutoModel(requestedModel)
+    ? await requireInstalledDefaultOllamaModel()
+    : requestedModel || await requireInstalledDefaultOllamaModel();
+  const installedModels = [];
+  const routerModelRoute = {
+    model: effectiveRequestedModel,
+    minSizeB: modelRules.routerMinSizeB,
+    candidates: [],
+    reason: 'Configured default model is used for routing.'
+  };
   const routerStageInput = await renderBobStageInput({ req, stage: 'router', prompt });
   const routerInput = buildBobRouterPrompt({
     prompt,
@@ -2171,10 +2579,11 @@ async function selectBobTurnRouteAndModel({ req, prompt, requestedModel, modelRu
   let route;
 
   try {
-    const routerGenerate = await generateOllama(routerModelRoute.model, routerInput, { temperature: 0 }, { format: 'json', think: false, reason: 'router-stage' });
+    const routerGenerate = await generateOllama(routerModelRoute.model, routerInput, BOB_ROUTER_OPTIONS, { format: 'json', reason: 'router-stage', think: false });
     routerGenerateData = summarizeOllamaGenerateData(routerGenerate.data);
     routerRawOutput = extractOllamaText(routerGenerate.data).trim();
     route = parseBobRouterContract(routerRawOutput, prompt);
+    route.factoids = normalizeFactoids(route.factoids);
   } catch (err) {
     route = heuristicBobRoute(prompt, false);
     routerRawOutput = getErrorText(err);
@@ -2182,11 +2591,11 @@ async function selectBobTurnRouteAndModel({ req, prompt, requestedModel, modelRu
   }
 
   const modelRoute = selectBobModel({
-    requestedModel,
+    requestedModel: effectiveRequestedModel,
     installedModels,
     route,
     prompt,
-    defaultModel: DEFAULT_MODEL,
+    defaultModel: defaultOllamaModel() || effectiveRequestedModel,
     minAutoSizeB: modelRules.fallbackMinSizeB,
     modelRules
   });
@@ -2240,11 +2649,10 @@ async function persistBobAssistantMessage({ req, model, response, metadata, rout
   });
   if (assistantMessage) publishMemoryChanged({ req, type: 'assistant-message', count: 1 });
   memorySkill.updateAfterTurn({ req, model, sourceMessageId: sourceMessageId || assistantMessage?.id });
-  scheduleMemoryIdleMerge({ req, model, reason: 'after-turn' });
   return assistantMessage;
 }
 
-async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, parameters = {}, modelRules = defaultBobModelRules(), includeDiagnostics = false, persist = false, deferEmotion = true, onLiveOutput = null, onResultReady = null } = {}) {
+async function runBobTurn({ req, prompt, requestedModel = '', parameters = {}, modelRules = defaultBobModelRules(), includeDiagnostics = false, persist = false, deferEmotion = true, onLiveOutput = null, onResultReady = null } = {}) {
   const startedAt = Date.now();
   const originalPrompt = String(prompt || '').trim();
   const stageSkills = ['router-stage', 'response-stage'];
@@ -2277,7 +2685,6 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
     })
   ];
   let modelDiagnostics = [];
-  if (persist) clearMemoryIdleMerge(req);
   const persistedUserMessage = persist
     ? await persistBobUserMessage({ req, model, prompt: originalPrompt })
     : null;
@@ -2338,7 +2745,6 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
       skills: responseMetadata.skills,
       inputContract: search.inputContract,
       outputContract: search.outputContract,
-      factoids: route.factoids || [],
       query: search.query,
       sources: search.sources,
       llm: trace,
@@ -2365,15 +2771,15 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
     model,
     prompt: promptWithMemory,
     format: 'json',
-    think: false,
-    keep_alive: ollamaConfig.current().keepAlive,
-    ...parameters
+    keep_alive: keepAliveForActiveUsers(),
+    ...parameters,
+    options: withDefaultOllamaOptions(parameters.options, BOB_RESPONSE_OPTIONS)
   };
   const response = typeof onLiveOutput === 'function'
     ? await generateOllamaStream(model, promptWithMemory, payload.options || {}, {
       format: payload.format,
-      think: payload.think,
       reason: 'bob-chat-response',
+      think: false,
       onChunk: (chunk, info = {}) => onLiveOutput({
         stage: 'response-stage',
         skill: 'bob-chat',
@@ -2392,7 +2798,7 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
         final: Boolean(info.final)
       })
     })
-    : await generateOllama(model, promptWithMemory, payload.options || {}, { format: payload.format, think: payload.think, reason: 'bob-chat-response' });
+    : await generateOllama(model, promptWithMemory, payload.options || {}, { format: payload.format, reason: 'bob-chat-response', think: false });
   const rawBobOutput = extractOllamaText(response.data);
   const rawBobGenerate = summarizeOllamaGenerateData(response.data);
   const actualGenerate = {
@@ -2403,13 +2809,15 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
   };
   const estimatedInputTokens = estimateTokens(promptWithMemory);
   const actualInputTokens = Number(response.data?.prompt_eval_count);
+  const validation = validateBobChatRawContract(rawBobOutput);
   const bobContract = applyBobChatFallbackIfNeeded({
     req,
     prompt: originalPrompt,
     contract: parseBobChatContract(rawBobOutput),
-    rawOutput: rawBobOutput
+    rawOutput: rawBobOutput,
+    validation,
+    generateSummary: rawBobGenerate
   });
-  const validation = validateBobChatRawContract(rawBobOutput);
   const emotionContract = deferEmotion
     ? {
       emotion: bobContract.metadata?.emotion || heuristicBobEmotion({ prompt: originalPrompt, response: bobContract.response }),
@@ -2452,7 +2860,6 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
     parsed: {
       response: bobContract.response,
       metadata: bobContract.metadata,
-      factoids: route.factoids || [],
       model,
       generate: actualGenerate,
       rawGenerate: rawBobGenerate
@@ -2476,7 +2883,6 @@ async function runBobTurn({ req, prompt, requestedModel = DEFAULT_MODEL, paramet
     validation,
     route,
     response: bobContract.response,
-    factoids: route.factoids || [],
     metadata: {
       ...responseMetadata,
       ...skillDebugMetadata(req, traceToSkillDebug(trace))
@@ -2526,7 +2932,7 @@ app.get('/api/memory/history', memory.historyHandler);
 app.get('/api/memory/manager', memory.managerHandler);
 app.get('/api/memory/context', applyAiRules, async (req, res) => {
   try {
-    const model = req.query.model || DEFAULT_MODEL;
+    const model = defaultOllamaModel();
     const conversationId = req.query.conversationId || 'default';
     const prompt = req.ai?.originalPrompt || req.query.prompt || '';
     const [context, messageCount] = await Promise.all([
@@ -2608,7 +3014,7 @@ app.delete('/api/memory/messages/:id', async (req, res) => {
   try {
     await memorySkill.requestCascadeUpdate({
       req,
-      model: req.body?.model || req.query.model || DEFAULT_MODEL,
+      model: await requireInstalledDefaultOllamaModel(),
       conversationId: req.body?.conversationId || req.query.conversationId || 'default',
       scopes: ['long', 'medium', 'short'],
       reason: 'message-delete'
@@ -2648,25 +3054,13 @@ app.delete('/api/memory', async (req, res) => {
   }
 });
 app.post('/api/memory/interaction', (req, res) => {
-  try {
-    scheduleMemoryIdleMerge({
-      req,
-      model: req.body?.model || req.query.model || DEFAULT_MODEL,
-      conversationId: req.body?.conversationId || req.query.conversationId || 'default',
-      reason: req.body?.reason || req.query.reason || 'interaction'
-    });
-    res.json({ ok: true, data: { idleMergeMs: MEMORY_IDLE_MERGE_MS } });
-  } catch (err) {
-    logger.warn('memory interaction failed', getErrorText(err));
-    res.status(500).json({ ok: false, error: 'Could not update memory idle timer' });
-  }
+  res.json({ ok: true, data: { idleMergeDisabled: true } });
 });
 app.post('/api/memory/merge', async (req, res) => {
   try {
-    clearMemoryIdleMerge(req, req.body?.conversationId || req.query.conversationId || 'default');
     const summary = await memorySkill.requestCascadeUpdate({
       req,
-      model: req.body?.model || req.query.model || DEFAULT_MODEL,
+      model: await requireInstalledDefaultOllamaModel(),
       conversationId: req.body?.conversationId || req.query.conversationId || 'default',
       scopes: ['long', 'medium', 'short'],
       reason: req.body?.reason || req.query.reason || 'manual'
@@ -2675,7 +3069,7 @@ app.post('/api/memory/merge', async (req, res) => {
   } catch (err) {
     const error = getErrorText(err);
     logger.error('memory merge failed', error);
-    res.status(err?.response?.status || 500).json({ ok: false, error });
+    res.status(err.statusCode || err?.response?.status || 500).json({ ok: false, error });
   }
 });
 app.post('/api/memory/summarize', async (req, res) => {
@@ -2685,7 +3079,7 @@ app.post('/api/memory/summarize', async (req, res) => {
   if (!isCascade && !scopeConfig) return res.status(400).json({ ok: false, error: 'Invalid memory scope' });
 
   try {
-    const model = req.body?.model || DEFAULT_MODEL;
+    const model = await requireInstalledDefaultOllamaModel();
     const summary = isCascade
       ? await memorySkill.requestCascadeUpdate({ req, model, conversationId: req.body?.conversationId || 'default', reason: 'manual-summarize' })
       : await memorySkill.refreshSummary({ req, model, scope, conversationId: req.body?.conversationId || 'default' });
@@ -2693,7 +3087,7 @@ app.post('/api/memory/summarize', async (req, res) => {
   } catch (err) {
     const error = getErrorText(err);
     logger.error(`memory summarize ${scope} failed`, error);
-    res.status(err?.response?.status || 500).json({ ok: false, error });
+    res.status(err.statusCode || err?.response?.status || 500).json({ ok: false, error });
   }
 });
 app.get('/api/admin/bootstrap/status', admin.bootstrapStatus);
@@ -2813,7 +3207,7 @@ app.post('/api/admin/bob-chat-test', admin.requireAdmin, applyAiRules, async (re
     const data = await runBobTurn({
       req,
       prompt,
-      requestedModel: req.body?.model || DEFAULT_MODEL,
+      requestedModel: req.body?.model || await requireInstalledDefaultOllamaModel(),
       parameters: req.body?.parameters || {},
       modelRules: defaultBobModelRules(req.body?.modelRules || {}),
       includeDiagnostics: false,
@@ -2825,7 +3219,7 @@ app.post('/api/admin/bob-chat-test', admin.requireAdmin, applyAiRules, async (re
   } catch (err) {
     const error = getErrorText(err);
     logger.error('bob chat test error', error);
-    res.status(err?.response?.status || 500).json({ ok: false, error });
+    res.status(err.statusCode || err?.response?.status || 500).json({ ok: false, error });
   }
 });
 
@@ -2859,7 +3253,7 @@ app.post('/api/admin/bob-chat-test/stream', admin.requireAdmin, applyAiRules, as
     const data = await runBobTurn({
       req,
       prompt,
-      requestedModel: req.body?.model || DEFAULT_MODEL,
+      requestedModel: req.body?.model || await requireInstalledDefaultOllamaModel(),
       parameters: req.body?.parameters || {},
       modelRules: defaultBobModelRules(req.body?.modelRules || {}),
       includeDiagnostics: false,
@@ -2885,12 +3279,13 @@ app.post('/api/admin/bob-chat-test/stream', admin.requireAdmin, applyAiRules, as
 // Non-streaming API proxy (awaits full response)
 app.post('/api/chat', applyAiRules, async (req, res) => {
   try {
-    const { model, prompt, parameters } = req.body;
+    const { prompt, parameters } = req.body;
     const originalPrompt = req.ai?.originalPrompt || prompt || '';
+    const model = await requireInstalledDefaultOllamaModel();
     const data = await runBobTurn({
       req,
       prompt: originalPrompt,
-      requestedModel: model || DEFAULT_MODEL,
+      requestedModel: model,
       parameters: parameters || {},
       modelRules: defaultBobModelRules(),
       includeDiagnostics: false,
@@ -2904,19 +3299,19 @@ app.post('/api/chat', applyAiRules, async (req, res) => {
   } catch (err) {
     const error = getErrorText(err);
     logger.error('chat error', error);
-    res.status(err?.response?.status || 500).json({ ok: false, error });
+    res.status(err.statusCode || err?.response?.status || 500).json({ ok: false, error });
   }
 });
 
 // Streaming endpoint that proxies Ollama's streaming response to the browser as Server-Sent Events
 app.get('/api/stream', applyAiRules, async (req, res) => {
-  const model = req.query.model || DEFAULT_MODEL;
-  const prompt = req.query.prompt || '';
-  const originalPrompt = req.ai?.originalPrompt || prompt;
-
-  logger.info(`Streaming chat request using model ${model}`);
-
   try {
+    const model = await requireInstalledDefaultOllamaModel();
+    const prompt = req.query.prompt || '';
+    const originalPrompt = req.ai?.originalPrompt || prompt;
+
+    logger.info(`Streaming chat request using model ${model}`);
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -3028,12 +3423,14 @@ app.post('/api/ollama/pull', admin.requireAdmin, (req, res) => {
 });
 
 app.get('/api/ollama/config', admin.requireAdmin, (req, res) => {
+  const config = ollamaConfig.current();
   res.json({
     ok: true,
     data: {
       url: OLLAMA_URL,
-      defaultModel: DEFAULT_MODEL,
-      ...ollamaConfig.current()
+      configPath: ollamaConfig.configPath,
+      defaultModel: config.defaultModel || '',
+      ...config
     }
   });
 });
@@ -3042,7 +3439,14 @@ app.post('/api/ollama/config', admin.requireAdmin, (req, res) => {
   try {
     const saved = ollamaConfig.save(req.body || {});
     logger.info(`Ollama config updated by ${req.user?.email || req.user?.preferred_username || req.user?.name || 'admin'}`);
-    res.json({ ok: true, data: saved });
+    res.json({
+      ok: true,
+      data: {
+        url: OLLAMA_URL,
+        configPath: ollamaConfig.configPath,
+        ...saved
+      }
+    });
   } catch (err) {
     logger.error('ollama config save failed', err?.message || err);
     res.status(500).json({ ok: false, error: 'Could not save Ollama config' });
@@ -3144,7 +3548,7 @@ app.get('/api/ollama/monitor/details', admin.requireAdmin, async (req, res) => {
     ok: version.ok || tags.ok || running.ok,
     data: {
       url: OLLAMA_URL,
-      defaultModel: DEFAULT_MODEL,
+      defaultModel: defaultOllamaModel(),
       config: ollamaConfig.current(),
       version: version.data || null,
       models: tags.data?.models || [],
@@ -3203,13 +3607,13 @@ app.post('/api/ollama/show', admin.requireAdmin, async (req, res) => {
   } catch (err) {
     const error = getErrorText(err);
     logger.error(`ollama show ${model} failed`, error);
-    res.status(err?.response?.status || 500).json({ ok: false, error });
+    res.status(err.statusCode || err?.response?.status || 500).json({ ok: false, error });
   }
 });
 
 app.post('/api/ollama/load', admin.requireAdmin, async (req, res) => {
   const model = req.body.model;
-  const keepAlive = req.body.keepAlive || '5m';
+  const keepAlive = ollamaKeepAlivePayload(req.body.keepAlive || '5m');
   if (!model) return res.status(400).json({ ok: false, error: 'model required' });
 
   const finishActivity = beginOllamaModelActivity(model, 'manual-load');
@@ -3217,16 +3621,17 @@ app.post('/api/ollama/load', admin.requireAdmin, async (req, res) => {
     logger.info(`Loading model ${model} with keep_alive ${keepAlive}`);
     const resp = await axios.post(`${OLLAMA_URL}/api/generate`, {
       model,
-      prompt: '',
+      prompt: OLLAMA_LOAD_PROMPT,
       keep_alive: keepAlive,
-      stream: false
+      stream: false,
+      options: OLLAMA_LOAD_OPTIONS
     }, { timeout: 120000 });
     publishOllamaModelStatus('load-finished');
     res.json({ ok: true, data: resp.data });
   } catch (err) {
     const error = getErrorText(err);
     logger.error(`ollama load ${model} failed`, error);
-    res.status(err?.response?.status || 500).json({ ok: false, error });
+    res.status(err.statusCode || err?.response?.status || 500).json({ ok: false, error });
   } finally {
     finishActivity();
   }
@@ -3241,16 +3646,17 @@ app.post('/api/ollama/unload', admin.requireAdmin, async (req, res) => {
     logger.info(`Unloading model ${model}`);
     const resp = await axios.post(`${OLLAMA_URL}/api/generate`, {
       model,
-      prompt: '',
+      prompt: OLLAMA_LOAD_PROMPT,
       keep_alive: 0,
-      stream: false
+      stream: false,
+      options: OLLAMA_LOAD_OPTIONS
     }, { timeout: 30000 });
     publishOllamaModelStatus('unload-finished');
     res.json({ ok: true, data: resp.data });
   } catch (err) {
     const error = getErrorText(err);
     logger.error(`ollama unload ${model} failed`, error);
-    res.status(err?.response?.status || 500).json({ ok: false, error });
+    res.status(err.statusCode || err?.response?.status || 500).json({ ok: false, error });
   } finally {
     finishActivity();
   }
@@ -3328,3 +3734,5 @@ const server = app.listen(PORT, () => {
   logger.info(`Server listening on http://localhost:${PORT} — proxying Ollama at ${OLLAMA_URL}`);
   logger.info(`Security middleware ${security.config.enabled ? 'enabled' : 'disabled'}`);
 });
+stt.attach(server);
+voicePipeline.attach(server);

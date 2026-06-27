@@ -138,6 +138,28 @@ function buildWebFallbackResponse(query, results = []) {
   ].join(' ');
 }
 
+function appendSourceLinks(response, sources = [], limit = 5) {
+  const base = String(response || '').trim();
+  const seen = new Set();
+  const lines = (Array.isArray(sources) ? sources : [])
+    .map(source => ({
+      title: stripHtml(source?.title || source?.url || 'Source').replace(/\s+/g, ' ').trim(),
+      url: String(source?.url || '').trim()
+    }))
+    .filter(source => /^https?:\/\//i.test(source.url))
+    .filter(source => {
+      const key = source.url.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, Math.max(1, Number(limit) || 5))
+    .map(source => `- [${source.title || 'Source'}](${source.url})`);
+
+  if (!lines.length) return base;
+  return `${base}\n\nSources:\n${lines.join('\n')}`;
+}
+
 function isSearchDumpResponse(value) {
   const text = String(value || '').trim();
   return /search results (for|are as follows)/i.test(text) ||
@@ -166,6 +188,7 @@ function hasUnsupportedWebClaims(response, results = []) {
 
 module.exports = {
   buildWebFallbackResponse,
+  appendSourceLinks,
   hasUnsupportedWebClaims,
   shouldSearchWeb,
   extractSearchQuery,

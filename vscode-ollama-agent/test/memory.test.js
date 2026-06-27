@@ -168,7 +168,7 @@ test('buildPrompt includes assistant emotional state in recent transcript', () =
   assert.match(prompt, /Assistant \[emotion=focused\]: I fixed the parser\./);
 });
 
-test('unprocessedMessageLimit drops processed chat from future prompt context', () => {
+test('unprocessedMessageLimit returns all unmerged chat without a fixed cap', () => {
   assert.equal(
     unprocessedMessageLimit({
       summaries: { short: { sourceMessageCount: 12 } },
@@ -191,7 +191,7 @@ test('unprocessedMessageLimit drops processed chat from future prompt context', 
       messageCount: 40,
       limit: 10
     }),
-    10
+    28
   );
 });
 

@@ -22,13 +22,7 @@ async function runWebSearchSkillPage() {
     return;
   }
 
-  const model = localStorage.getItem('selectedModel') || document.getElementById('model')?.value;
-  if (!model) {
-    if (status) status.textContent = 'Install or select a Bob model before running this skill.';
-    return;
-  }
-
-  if (status) status.textContent = `Searching the web with ${model}...`;
+  if (status) status.textContent = 'Searching the web...';
   if (output) output.textContent = 'Working...';
   if (sources) sources.innerHTML = '';
   if (button) button.disabled = true;
@@ -38,7 +32,6 @@ async function runWebSearchSkillPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model,
         prompt: `Search the web for ${query} and summarize`
       })
     });

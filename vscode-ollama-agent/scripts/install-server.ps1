@@ -3,7 +3,9 @@ param(
   [switch]$Full,
   [switch]$InstallOllama,
   [switch]$InstallWsl,
-  [switch]$PersistPath
+  [switch]$PersistPath,
+  [switch]$SkipFasterWhisper,
+  [switch]$SkipVosk
 )
 
 $ErrorActionPreference = 'Stop'
@@ -217,6 +219,7 @@ function Ensure-NpmDependencies {
     } else {
       Write-Host "[missing] node_modules" -ForegroundColor Yellow
     }
+    Test-VoskNodePackage
     return
   }
 
@@ -226,6 +229,57 @@ function Ensure-NpmDependencies {
 
   Write-Host "[install] npm.cmd install"
   & npm.cmd install
+  Test-VoskNodePackage
+}
+
+function Test-VoskNodePackage {
+  Write-Step "Checking Vosk Node package"
+
+  if (-not (Test-Command node)) {
+    Write-Host "[missing] node is required to verify Vosk package loading" -ForegroundColor Yellow
+    return
+  }
+
+  $previousPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $output = & node -e "require('vosk'); console.log('vosk module loaded')" 2>&1
+  $exitCode = $LASTEXITCODE
+  $ErrorActionPreference = $previousPreference
+
+  if ($exitCode -eq 0) {
+    Write-Host "[ok] Vosk Node package loads"
+    return
+  }
+
+  Write-Host "[missing] Vosk Node package is not loadable" -ForegroundColor Yellow
+  Write-Host "        $output" -ForegroundColor Yellow
+
+  if ($CheckOnly) {
+    Write-Host "        Run: npm.cmd install" -ForegroundColor Yellow
+    return
+  }
+
+  if (-not (Test-Command npm.cmd)) {
+    Write-Host "        npm.cmd is unavailable; cannot install Vosk dependency." -ForegroundColor Yellow
+    return
+  }
+
+  Write-Host "[install] npm.cmd install"
+  & npm.cmd install
+
+  $previousPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $output = & node -e "require('vosk'); console.log('vosk module loaded')" 2>&1
+  $exitCode = $LASTEXITCODE
+  $ErrorActionPreference = $previousPreference
+
+  if ($exitCode -eq 0) {
+    Write-Host "[ok] Vosk Node package loads"
+  } else {
+    Write-Host "[warning] Vosk Node package still does not load locally." -ForegroundColor Yellow
+    Write-Host "          $output" -ForegroundColor Yellow
+    Write-Host "          Docker deployment will verify Vosk during image build." -ForegroundColor Yellow
+  }
 }
 
 function Ensure-EnvFile {
@@ -346,15 +400,68 @@ function Ensure-PiperVoiceDirectory {
   & powershell -ExecutionPolicy Bypass -File $installer -VoiceDir "voices"
 }
 
+function Ensure-VoskModelDirectory {
+  if ($SkipVosk) {
+    Write-Host "[skip] Vosk model install skipped by -SkipVosk"
+    return
+  }
+
+  $modelDir = Join-Path (Get-Location) "stt-models"
+  if (-not (Test-Path $modelDir)) {
+    if ($CheckOnly) {
+      Write-Host "[missing] stt-models directory for Vosk model mount" -ForegroundColor Yellow
+    } else {
+      New-Item -ItemType Directory -Path $modelDir | Out-Null
+      Write-Host "[created] stt-models directory for Vosk model mount"
+    }
+  } else {
+    Write-Host "[ok] stt-models directory exists"
+  }
+
+  $installer = Join-Path $PSScriptRoot "install-vosk-model.ps1"
+  if (-not (Test-Path $installer)) {
+    throw "Missing Vosk model installer script: $installer"
+  }
+
+  if ($CheckOnly) {
+    & powershell -ExecutionPolicy Bypass -File $installer -CheckOnly
+    return
+  }
+
+  Write-Host "[install] Vosk speech recognition model"
+  & powershell -ExecutionPolicy Bypass -File $installer
+}
+
+function Ensure-FasterWhisperPackage {
+  if ($SkipFasterWhisper) {
+    Write-Host "[skip] Faster-Whisper install skipped by -SkipFasterWhisper"
+    return
+  }
+
+  $installer = Join-Path $PSScriptRoot "install-faster-whisper.ps1"
+  if (-not (Test-Path $installer)) {
+    throw "Missing Faster-Whisper installer script: $installer"
+  }
+
+  if ($CheckOnly) {
+    & powershell -ExecutionPolicy Bypass -File $installer -CheckOnly
+    return
+  }
+
+  & powershell -ExecutionPolicy Bypass -File $installer
+}
+
 function Show-NextSteps {
   Write-Step "Next steps"
   Write-Host "1. Edit .env and replace change-me-before-production values."
   Write-Host "2. Edit env/prod.env and replace replace-with-generated-secret values."
   Write-Host "3. Confirm Piper voice model files exist under ./voices."
-  Write-Host "4. If WSL was installed or Windows features changed, reboot."
-  Write-Host "5. Run: npm run docker:start"
-  Write-Host "6. Run: npm run docker:config"
-  Write-Host "7. Run: npm run docker:up"
+  Write-Host "4. Confirm Faster-Whisper is installed, or use Docker where it is installed in the app image."
+  Write-Host "5. Confirm Vosk STT model files exist under ./stt-models if VOICE_PIPELINE_STT_PROVIDER=vosk."
+  Write-Host "6. If WSL was installed or Windows features changed, reboot."
+  Write-Host "7. Run: npm run docker:start"
+  Write-Host "8. Run: npm run docker:config"
+  Write-Host "9. Run: npm run docker:up"
 
   if ($script:PathChanged -or $script:PackagesInstalled) {
     Write-Host ""
@@ -392,6 +499,8 @@ Test-WindowsFeatureState -FeatureName "HypervisorPlatform"
 Write-Step "Checking project files"
 Ensure-EnvFile
 Ensure-PiperVoiceDirectory
+Ensure-FasterWhisperPackage
+Ensure-VoskModelDirectory
 Ensure-NpmDependencies
 
 Write-Step "Checking virtualization support"

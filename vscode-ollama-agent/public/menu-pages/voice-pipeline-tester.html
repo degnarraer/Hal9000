@@ -1,0 +1,120 @@
+<section class="panel-view mic-tester-view voice-pipeline-tester-view">
+  <div class="monitor-toolbar">
+    <h3>Voice Pipeline Tester</h3>
+    <button id="voicePipelineCopyDebug" class="bob-chat-debug-copy" type="button">
+      <i data-lucide="copy"></i>
+      Copy Debug
+    </button>
+  </div>
+
+  <div class="mic-tester-grid">
+    <div class="mic-tester-card">
+      <h4>Controls</h4>
+      <div class="mic-tester-controls">
+        <div class="mic-tester-process">App microphone path</div>
+        <label>
+          <span>App Input Device</span>
+          <select id="voicePipelineInputDevice">
+            <option value="">Browser default microphone</option>
+          </select>
+        </label>
+        <label class="mic-tester-inline-toggle">
+          <input id="voicePipelineToggleRawMic" type="checkbox">
+          <span>Raw mic capture</span>
+        </label>
+        <div class="mic-tester-actions">
+          <button id="voicePipelineStart" class="settings-action" type="button">
+            <i data-lucide="mic"></i>
+            Start
+          </button>
+          <button id="voicePipelineStop" class="settings-action" type="button" disabled>
+            <i data-lucide="square"></i>
+            Stop
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="mic-tester-card">
+      <h4>Pipeline Stages</h4>
+      <div class="mic-diagnostic-grid voice-pipeline-stage-grid">
+        <div><span id="voicePipelineMicLight" class="mic-status-light mic-status-light-idle"></span><strong id="voicePipelineMic">Mic idle</strong></div>
+        <div><span id="voicePipelineMicAudioLight" class="mic-status-light mic-status-light-idle"></span><strong id="voicePipelineMicAudio">Mic audio idle</strong></div>
+        <div><span id="voicePipelinePcmLight" class="mic-status-light mic-status-light-idle"></span><strong id="voicePipelinePcm">PCM pump idle</strong></div>
+        <div><span id="voicePipelineTransportLight" class="mic-status-light mic-status-light-idle"></span><strong id="voicePipelineTransport">Transport idle</strong></div>
+        <div><span id="voicePipelinePressureLight" class="mic-status-light mic-status-light-idle"></span><strong id="voicePipelinePressure">Back pressure idle</strong></div>
+        <div><span id="voicePipelineVadLight" class="mic-status-light mic-status-light-idle"></span><strong id="voicePipelineVad">VAD idle</strong></div>
+        <div><span id="voicePipelineSttLight" class="mic-status-light mic-status-light-idle"></span><strong id="voicePipelineStt">STT idle</strong></div>
+        <div><span id="voicePipelineOllamaLight" class="mic-status-light mic-status-light-idle"></span><strong id="voicePipelineOllama">Ollama idle</strong></div>
+        <div><span id="voicePipelineTtsLight" class="mic-status-light mic-status-light-idle"></span><strong id="voicePipelineTts">Kokoro idle</strong></div>
+        <div><span id="voicePipelineAudioLight" class="mic-status-light mic-status-light-idle"></span><strong id="voicePipelineAudio">Audio output idle</strong></div>
+      </div>
+    </div>
+
+    <div class="mic-tester-card">
+      <h4>Stage Toggles</h4>
+      <div class="mic-subsystem-grid">
+        <label><input id="voicePipelineToggleVad" type="checkbox" checked><span>VAD / turn detection</span></label>
+        <label><input id="voicePipelineToggleStt" type="checkbox" checked><span>STT</span></label>
+        <label><input id="voicePipelineToggleLlm" type="checkbox" checked><span>Ollama</span></label>
+        <label><input id="voicePipelineToggleTts" type="checkbox" checked><span>Kokoro TTS</span></label>
+        <label><input id="voicePipelineToggleAudio" type="checkbox" checked><span>Audio output</span></label>
+        <label><input id="voicePipelineToggleChart" type="checkbox" checked><span>Mic chart</span></label>
+        <label><input id="voicePipelineToggleEvents" type="checkbox" checked><span>Event log</span></label>
+      </div>
+    </div>
+
+    <div class="mic-tester-card">
+      <div class="mic-tester-card-heading">
+        <h4>Mic Chart</h4>
+        <div class="mic-renderer-toggle" role="group" aria-label="Voice pipeline mic chart renderer">
+          <button class="mic-renderer-mode active" type="button" data-voice-pipeline-renderer="scroll">Scroll</button>
+          <button class="mic-renderer-mode" type="button" data-voice-pipeline-renderer="waveform">Wave</button>
+          <button class="mic-renderer-mode" type="button" data-voice-pipeline-renderer="power">Power</button>
+        </div>
+      </div>
+      <canvas id="voicePipelineMicChart" width="720" height="150"></canvas>
+      <p id="voicePipelineChartStatus" class="panel-copy">Waiting for mic samples.</p>
+    </div>
+
+    <div class="mic-tester-card">
+      <h4>Transcript</h4>
+      <div id="voicePipelineTranscript" class="mic-tester-transcript">No transcript yet.</div>
+    </div>
+
+    <div class="mic-tester-card">
+      <h4>Response</h4>
+      <div id="voicePipelineResponse" class="mic-tester-transcript">No response yet.</div>
+    </div>
+
+    <div class="mic-tester-card">
+      <h4>Service Status</h4>
+      <div class="mic-services-status">
+        <div><span>Provider</span><strong id="voicePipelineProviderStatus">Pipeline</strong></div>
+        <div><span>STT</span><strong id="voicePipelineSttStatus">Loading...</strong></div>
+        <div><span>TTS</span><strong id="voicePipelineTtsStatus">Loading...</strong></div>
+        <div><span>Sample rate</span><strong id="voicePipelineSampleRate">Unknown</strong></div>
+        <div><span>VAD</span><strong id="voicePipelineVadStatus">Loading...</strong></div>
+        <div class="mic-services-wide"><span>Details</span><strong id="voicePipelineDetails">Loading...</strong></div>
+      </div>
+    </div>
+
+    <div class="mic-tester-card">
+      <h4>Path Under Test</h4>
+      <div class="voice-pipeline-path">
+        <span>Mic / browser audio</span>
+        <span>Pipecat transport</span>
+        <span>VAD / turn detection</span>
+        <span>STT</span>
+        <span>Ollama</span>
+        <span>Kokoro TTS</span>
+        <span>Audio output</span>
+      </div>
+    </div>
+
+    <div class="mic-tester-card mic-tester-log-card">
+      <h4>Events</h4>
+      <pre id="voicePipelineEvents" class="monitor-output">No events yet.</pre>
+    </div>
+  </div>
+</section>

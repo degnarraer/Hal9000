@@ -11,6 +11,24 @@
         <option value="-1">Keep loaded</option>
       </select>
     </label>
+    <label>
+      <span>Active users keep loaded</span>
+      <select id="ollamaActiveKeepAlive">
+        <option value="-1">Keep loaded while active</option>
+        <option value="30m">30 minutes</option>
+        <option value="1h">1 hour</option>
+        <option value="5m">5 minutes</option>
+      </select>
+    </label>
+    <label>
+      <span>Unload after no users</span>
+      <select id="ollamaIdleUnloadDelayMs">
+        <option value="10000">10 seconds</option>
+        <option value="30000">30 seconds</option>
+        <option value="60000">1 minute</option>
+        <option value="300000">5 minutes</option>
+      </select>
+    </label>
     <div class="ollama-config-actions">
       <button id="saveOllamaConfig" type="button">Save</button>
     </div>

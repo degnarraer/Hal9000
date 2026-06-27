@@ -1,0 +1,56 @@
+<section class="panel-view">
+  <div class="monitor-toolbar">
+    <h3>Microphone Services</h3>
+  </div>
+
+  <div class="settings-group mic-services-group">
+    <h4>Speech Recognition Provider</h4>
+
+    <label class="debug-setting-row">
+      <input name="micTranscriptionProvider" type="radio" value="pipeline">
+      <span>
+        <strong>Voice pipeline</strong>
+        <small>Use the single Pipecat-style path: browser audio transport, server VAD, STT, Ollama, Kokoro TTS, and audio output.</small>
+      </span>
+    </label>
+
+    <label class="debug-setting-row">
+      <input name="micTranscriptionProvider" type="radio" value="auto">
+      <span>
+        <strong>Auto</strong>
+        <small>Use server-side STT when available, then fall back to browser speech recognition.</small>
+      </span>
+    </label>
+
+    <label class="debug-setting-row">
+      <input name="micTranscriptionProvider" type="radio" value="server">
+      <span>
+        <strong>Server STT only</strong>
+        <small>Stream microphone PCM to the server and do not fall back to browser speech services.</small>
+      </span>
+    </label>
+
+    <label class="debug-setting-row">
+      <input name="micTranscriptionProvider" type="radio" value="browser">
+      <span>
+        <strong>Browser STT only</strong>
+        <small>Use the browser Web Speech API and do not open the server STT stream.</small>
+      </span>
+    </label>
+
+    <div id="micServicesStatusPanel" class="mic-services-status">
+      <div><span>Provider</span><strong id="micServicesProvider">Loading...</strong></div>
+      <div><span>Server STT</span><strong id="micServicesSttState">Loading...</strong></div>
+      <div><span>Sample rate</span><strong id="micServicesSampleRate">Loading...</strong></div>
+      <div><span>Model path</span><strong id="micServicesModelPath">Loading...</strong></div>
+      <div><span>Settings file</span><strong id="micServicesSettingsPath">Loading...</strong></div>
+      <div class="mic-services-wide"><span>Details</span><strong id="micServicesDetails">Loading...</strong></div>
+    </div>
+
+    <button id="saveMicServices" class="settings-action" type="button">
+      <i data-lucide="save"></i>
+      Save Microphone Services
+    </button>
+    <p id="micServicesStatus" class="panel-copy">Loading microphone services...</p>
+  </div>
+</section>
